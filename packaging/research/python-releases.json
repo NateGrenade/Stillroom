@@ -1,0 +1,15 @@
+{
+  "tag_name": "20261013",
+  "assets": [
+    {
+      "name": "cpython-3.13.16+20261013-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "browser_download_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.13.16%2B20261013-aarch64-apple-darwin-install_only_stripped.tar.gz",
+      "digest": "sha256:16a5332fb0dcb77f163fc8f8cbccd95be1644cc53e68e5d2a79f50afd6680a0e"
+    },
+    {
+      "name": "cpython-3.13.16+20261013-x86_64-apple-darwin-install_only_stripped.tar.gz",
+      "browser_download_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261013/cpython-3.13.16%2B20261013-x86_64-apple-darwin-install_only_stripped.tar.gz",
+      "digest": "sha256:f507ae04eb7747cd97cb484e8c5d83936cbfc52d9b08a1f35c00b47c707b1ae1"
+    }
+  ]
+}

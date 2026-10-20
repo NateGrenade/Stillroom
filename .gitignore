@@ -1,0 +1,25 @@
+# Personal library and credentials
+/audio/
+/data/
+/imports/
+/.tools/
+.env
+.env.*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+# Generated files and local evidence
+__pycache__/
+*.py[cod]
+.DS_Store
+/packaging/build/
+/packaging/cache/
+/packaging/vendor/
+/packaging/research/*
+!/packaging/research/runtime-manifest.json
+!/packaging/research/audio-manifest.json
+!/packaging/research/python-releases.json
+!/packaging/research/ytdlp-releases.json
+/tests/*.json
+/tests/*.png

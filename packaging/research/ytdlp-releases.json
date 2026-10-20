@@ -1,0 +1,15 @@
+{
+  "tag_name": "2026.08.19",
+  "assets": [
+    {
+      "name": "yt-dlp.exe",
+      "browser_download_url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe",
+      "digest": "sha256:66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a"
+    },
+    {
+      "name": "yt-dlp_macos",
+      "browser_download_url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp_macos",
+      "digest": "sha256:0f192b7ec147ab6288885d6351d9ab67367640029b4377576ef46dd79cf7b202"
+    }
+  ]
+}

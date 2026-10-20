@@ -1,0 +1,1 @@
+{"name":"stillroom","private":true,"type":"module","scripts":{"test:player":"node --test tests/player.test.mjs","start":"python3 -m app.launch --no-open"}}
