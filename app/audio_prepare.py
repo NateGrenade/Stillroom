@@ -11,7 +11,6 @@ from contextvars import ContextVar
 import math
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,6 +19,7 @@ import uuid
 
 from .library import LibraryError, executable, local_audio_input_options, probe
 from .runtime import stop_process_tree, subprocess_options
+from .storage_policy import prepare_original, provenance, reject_quality_options, native_opus
 
 SAMPLE_RATE = 44100
 ANALYSIS_RATE = 8000
@@ -297,6 +297,8 @@ def _prepare_audio(source: Path, destination_dir: Path, options: dict, progress=
     """
     if not isinstance(options, dict):
         raise LibraryError("Audio preparation options must be an object.")
+    reject_quality_options(options)
+    allow_native_opus = native_opus(options.get("allowNativeOpus", True))
     exact, looping = options.get("exact", False), options.get("loop", False)
     if not isinstance(exact, bool) or not isinstance(looping, bool):
         raise LibraryError("Exact timestamps and loop must be true or false.")
@@ -307,7 +309,7 @@ def _prepare_audio(source: Path, destination_dir: Path, options: dict, progress=
         raise LibraryError("Choose an existing audio file.")
     if progress:
         progress("Inspecting audio")
-    source_duration, source_extension = probe(source)
+    source_duration, _ = probe(source)
     start = 0.0 if requested_start is None else requested_start
     end = source_duration if requested_end is None else requested_end
     if start >= source_duration or end > source_duration + 1/SAMPLE_RATE or end <= start:
@@ -325,34 +327,11 @@ def _prepare_audio(source: Path, destination_dir: Path, options: dict, progress=
                 "searchRadius": 0.0 if exact else SEARCH_SECONDS}
     if requested_start is None and requested_end is None and not looping:
         analysis.update(appliedStart=0.0, appliedEnd=source_duration, boundaryConfidence="unchanged")
-        duration = source_duration
-        # Uploaded files may have a generic staging suffix; use a canonical
-        # suffix so the preview response advertises a playable audio MIME type.
-        if source_extension is None or source.suffix.lower() != source_extension:
-            destination_dir = Path(destination_dir).expanduser().resolve()
-            destination_dir.mkdir(parents=True, exist_ok=True)
-            destination = destination_dir / f"prepared-{uuid.uuid4().hex}{source_extension or '.m4a'}"
-            try:
-                if source_extension:
-                    source_size = source.stat().st_size
-                    if source_size > MAX_PREPARED_BYTES:
-                        raise LibraryError("The prepared audio exceeded the 512 MB file limit. Choose a shorter selection.", 413)
-                    _check_work_limits(additional_bytes=source_size)
-                    shutil.copyfile(source, destination)
-                else:
-                    if progress:
-                        progress("Converting audio for playback")
-                    _run([executable("ffmpeg"), "-v", "error", "-nostdin", "-i", str(source),
-                          "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "256k",
-                          "-movflags", "+faststart", str(destination)])
-                    duration, _ = probe(destination)
-                _check_work_limits()
-                source = destination
-            except BaseException:
-                destination.unlink(missing_ok=True)
-                raise
-        return {"file": str(source), "metadata": {"kind": "original", "loopStart": 0, "loopEnd": None},
-                "analysis": analysis, "duration": duration}
+        stored = prepare_original(source, destination_dir, allow_native_opus=allow_native_opus, run=_run, progress=progress,
+                                  cancel_event=_CANCEL_EVENT.get())
+        _check_work_limits()
+        notes.append(stored["storage"]["note"])
+        return {**stored, "metadata": {"kind": "original", "loopStart": 0, "loopEnd": None}, "analysis": analysis}
 
     start_limits = (max(0, start-SEARCH_SECONDS), min(end-.25, start+SEARCH_SECONDS))
     end_limits = (max(start+.25, end-SEARCH_SECONDS), min(source_duration, end+SEARCH_SECONDS))
@@ -434,7 +413,10 @@ def _prepare_audio(source: Path, destination_dir: Path, options: dict, progress=
                 progress("Verifying prepared audio")
             _run([executable("ffmpeg"), "-v", "error", "-nostdin", "-i", str(destination), "-map", "0:a:0", "-f", "null", "-"])
             analysis.update(appliedStart=start, appliedEnd=end, sampleRate=SAMPLE_RATE, fileDuration=actual)
-        return {"file": str(destination), "metadata": metadata, "analysis": analysis, "duration": duration}
+        note = "Saved the prepared selection as lossless FLAC to preserve its verified sample boundaries."
+        notes.append(note)
+        storage = provenance(source, destination, "edited_lossless", note)
+        return {"file": str(destination), "metadata": metadata, "analysis": analysis, "duration": duration, "storage": storage}
     except BaseException:
         destination.unlink(missing_ok=True)
         raise

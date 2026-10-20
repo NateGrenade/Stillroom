@@ -124,6 +124,29 @@ class SharingTests(SharingFixture):
         self.assertEqual(self.audio_state(), audio)
         self.assertEqual(self.source.read_bytes(), original)
 
+    def test_opus_containers_share_through_restricted_local_demuxers(self):
+        original_filename = Path(self.track["audioUrl"]).name
+        for suffix, container in ((".opus", "ogg"), (".ogg", "ogg"), (".webm", "webm")):
+            with self.subTest(suffix=suffix):
+                filename = self.track["id"] + suffix
+                stored = self.library.audio / filename
+                subprocess.run([executable("ffmpeg"), "-v", "error", "-nostdin", "-y", "-i", str(self.source),
+                                "-map", "0:a:0", "-c:a", "libopus", "-b:a", "128k", "-f", container,
+                                str(stored)], check=True)
+                with self.library.connect() as conn:
+                    conn.execute("UPDATE tracks SET audio_filename=? WHERE id=?", (filename, self.track["id"]))
+                    conn.commit()
+                before = stored.read_bytes()
+                with self.export(False) as exported:
+                    result = inspect(exported.path)
+                    self.assertEqual(result["streams"][0]["codec_name"], "aac")
+                    self.assertAlmostEqual(float(result["format"]["duration"]), 3, delta=.05)
+                self.assertEqual(stored.read_bytes(), before)
+                self.assert_clean()
+        with self.library.connect() as conn:
+            conn.execute("UPDATE tracks SET audio_filename=? WHERE id=?", (original_filename, self.track["id"]))
+            conn.commit()
+
     def test_original_ignores_loop_bounds_and_loop_uses_selected_bounds(self):
         original = self.library.import_file(self.source, {"title": "Whole", "loopStart": .5, "loopEnd": 1.25}, allow_duplicate=True)
         loop = self.library.import_file(self.source, {"title": "Loop", "kind": "loop", "loopStart": .5, "loopEnd": 1.75}, allow_duplicate=True)
@@ -391,6 +414,24 @@ class SharingHTTPTests(SharingFixture):
             self.assertEqual(raw[4:8], b'ftyp')
             self.assertNotIn(b'private-source-token', raw)
         self.assert_clean()
+
+    def test_opus_container_playback_has_explicit_mime_and_range_support(self):
+        original = self.library.audio / Path(self.track["audioUrl"]).name
+        for suffix, mime in ((".opus", "audio/ogg"), (".ogg", "audio/ogg"), (".webm", "audio/webm")):
+            with self.subTest(suffix=suffix):
+                filename = self.track["id"] + suffix
+                stored = self.library.audio / filename
+                stored.write_bytes(original.read_bytes())
+                connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=10)
+                try:
+                    connection.request("GET", "/audio/" + filename, headers={"Range": "bytes=0-15"})
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 206)
+                    self.assertEqual(response.getheader("Content-Type"), mime)
+                    self.assertEqual(response.getheader("Accept-Ranges"), "bytes")
+                    self.assertEqual(response.read(), stored.read_bytes()[:16])
+                finally:
+                    connection.close()
 
     def test_get_head_export_and_invalid_routes_do_not_encode(self):
         with patch.object(self.sharing, 'export', side_effect=AssertionError('must not export')):

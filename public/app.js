@@ -5,6 +5,7 @@ import { PlaylistImportDialog } from './playlist-import.js';
 import { SettingsDialog } from './settings.js';
 import { EditInfoDialog } from './edit-info.js';
 import { ShareSongDialog } from './share-song.js';
+import { SpeedControl, AdvancedPlaybackOptions, RecommendationDisclosure, normalizeReverb } from './playback-controls.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -91,6 +92,7 @@ let librarySignature = '';
 let featuredTrack = null;
 let playback = player.getState();
 let lastTrackError = '';
+let lastEffectsError = '';
 let toastTimeout;
 let playlistEditId = null;
 let addingTrackId = null;
@@ -108,6 +110,43 @@ let recommendations = null;
 hydrateIcons();
 const volume = Number(readPreference('volume', 0.4));
 player.setVolume(Number.isFinite(volume) ? Math.min(1, Math.max(0, volume)) : 0.4);
+player.setPlaybackRate(readPreference('playbackRate', 1));
+player.setPitchChanges(readPreference('pitchChanges', true) !== false);
+
+function setSongPlaybackRate(value) {
+  player.setPlaybackRate(value);
+  savePreference('playbackRate', player.getState().playbackRate);
+}
+function setSongPitchChanges(value) {
+  player.setPitchChanges(value);
+  savePreference('pitchChanges', player.getState().pitchChanges);
+}
+
+async function setSongReverb(value) {
+  try {
+    await player.setReverb(normalizeReverb(value));
+    savePreference('reverb', player.getState().reverb);
+  } catch (error) {
+    advancedOptions.setReverb(player.getState().reverb);
+    toast(error.message || 'Reverb is unavailable for this playback.');
+  }
+}
+
+const playerSpeedControl = new SpeedControl({
+  root: $('#player-speed-control'),
+  playbackRate: player.getState().playbackRate,
+  pitchChanges: player.getState().pitchChanges,
+  onPlaybackRateChange: setSongPlaybackRate,
+  onPitchChangesChange: setSongPitchChanges,
+});
+const advancedOptions = new AdvancedPlaybackOptions({
+  root: $('#player-advanced'), reverb: readPreference('reverb', 0), onReverbChange: setSongReverb,
+});
+const recommendationDisclosure = new RecommendationDisclosure({
+  root: $('#recommendations'), collapsed: readPreference('recommendationsCollapsed', false) === true,
+  onCollapseChange: collapsed => savePreference('recommendationsCollapsed', collapsed),
+});
+setSongReverb(readPreference('reverb', 0));
 
 async function api(path, options = {}) {
   const response = await fetch(path, options);
@@ -294,6 +333,10 @@ function playTrack(id, repeatOne = false) {
 }
 function updatePlayer(state) {
   playback = state;
+  playerSpeedControl.setPlaybackSettings(state);
+  advancedOptions.setReverb(state.reverb);
+  advancedOptions.setEffectsError(state.effectsError);
+  recommendations?.setPlaybackSettings({ playbackRate: state.playbackRate, pitchChanges: state.pitchChanges, reverb: state.reverb });
   const track = state.track;
   $('#now-title').textContent = track ? trackTitle(track) : 'A moment of quiet';
   $('#now-artist').textContent = state.error ? 'Unable to play this track' : track ? trackArtist(track) : 'Choose something to play';
@@ -336,6 +379,8 @@ function updatePlayer(state) {
   $('#playback-label').classList.toggle('is-playing', state.playing);
   if (state.error && state.error !== lastTrackError) toast(typeof state.error === 'string' ? state.error : 'This track could not be played.');
   lastTrackError = state.error || '';
+  if (state.effectsError && state.effectsError !== lastEffectsError) toast(state.effectsError);
+  lastEffectsError = state.effectsError || '';
   updateTrackPlayback();
   document.title = state.playing && track ? `${trackTitle(track)} — Stillroom` : 'Stillroom — your music, at home';
 }
@@ -411,7 +456,7 @@ $('#import-youtube-playlist-open').addEventListener('click', () => {
   $('#import-dialog').close();
   playlistImporter.open('youtube');
 });
-recommendations = new RecommendationPanel({ root: $('#recommendations'), api, refreshLibrary, pauseMain: () => { player.pause(); importer.pausePreview(); }, getVolume: () => player.getState().volume, storage: (() => { try { return sessionStorage; } catch { return null; } })() });
+recommendations = new RecommendationPanel({ root: $('#recommendations'), api, refreshLibrary, pauseMain: () => { player.pause(); importer.pausePreview(); }, getVolume: () => player.getState().volume, playbackRate: player.getState().playbackRate, pitchChanges: player.getState().pitchChanges, reverb: player.getState().reverb, createMediaRoute: (audio, onError, onPlaybackError) => player.createMediaRoute(audio, onError, onPlaybackError), onPlaybackRateChange: setSongPlaybackRate, onPitchChangesChange: setSongPitchChanges, storage: (() => { try { return sessionStorage; } catch { return null; } })() });
 connectRecommendationPlayback(player, recommendations, () => importer.pausePreview());
 window.addEventListener('pagehide', () => recommendations.pagehide());
 window.addEventListener('pageshow', event => { if (event.persisted) location.reload(); });
@@ -614,6 +659,7 @@ $('#player-mute').addEventListener('click', () => {
   else { player.setVolume(previousVolume || 0.4); savePreference('volume', previousVolume || 0.4); }
 });
 document.addEventListener('keydown', (event) => {
+  if (event.defaultPrevented) return;
   if (event.key === 'Escape') { closeMenu(true); return; }
   const editing = event.target.closest('input, textarea, select, button, [contenteditable="true"]');
   if (event.key === '/' && !editing && !$$('dialog[open]').length) { event.preventDefault(); $('#search').focus(); }
@@ -622,7 +668,7 @@ document.addEventListener('keydown', (event) => {
     const discovery = recommendations.player;
     if (discovery.active && ['ready', 'retained'].includes(discovery.session?.status)) {
       event.preventDefault();
-      if (discovery.audio.paused) discovery.audio.play().catch(() => toast('Press Play in the recommendation player to resume.')); else discovery.audio.pause();
+      if (discovery.audio.paused) discovery.resume().catch(() => toast('Press Play in the recommendation player to resume.')); else discovery.audio.pause();
     } else if (playback.track) { event.preventDefault(); player.toggle(); }
   }
   if (!$('#track-menu').hidden && ['ArrowDown', 'ArrowUp'].includes(event.key)) {

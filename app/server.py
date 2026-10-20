@@ -31,6 +31,7 @@ from .recommendations import Recommendations
 from .youtube_auth import YouTubeAuth, MAX_COOKIE_BYTES
 from .updates import Updates, MAX_UPDATE_BYTES
 from .sharing import Sharing
+from .storage_policy import reject_quality_options
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PORT = 8768
@@ -230,7 +231,7 @@ class Handler(BaseHTTPRequestHandler):
             raise LibraryError("API endpoint not found.", 404)
         if path.startswith("/audio/"):
             filename = path[len("/audio/"):]
-            if not re.fullmatch(r"[0-9a-f]{32}\.(?:mp3|m4a|aac|wav|flac)", filename):
+            if not re.fullmatch(r"[0-9a-f]{32}\.(?:mp3|m4a|aac|wav|flac|opus|ogg|webm)", filename):
                 raise LibraryError("Audio not found.", 404)
             return self.send_file(self.server.library.audio, filename, head, audio=True)
         filename = "index.html" if path == "/" else path.lstrip("/")
@@ -269,7 +270,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     return
                 status = 206
-            content_types = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".wav": "audio/wav", ".flac": "audio/flac", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8"}
+            content_types = {".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".wav": "audio/wav", ".flac": "audio/flac", ".opus": "audio/ogg", ".ogg": "audio/ogg", ".webm": "audio/webm", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8"}
             content_type = content_types.get(target.suffix.lower()) or mimetypes.guess_type(str(target))[0] or "application/octet-stream"
             self.send_response(status)
             self.send_header("Content-Type", content_type)
@@ -493,6 +494,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise LibraryError("X-Track-Metadata must be base64-encoded UTF-8 JSON.")
             if not isinstance(metadata, dict):
                 raise LibraryError("Track metadata must be a JSON object.")
+        reject_quality_options(metadata)
         handle, temporary = tempfile.mkstemp(prefix="upload-", dir=self.server.import_jobs.session)
         try:
             with os.fdopen(handle, "wb") as output:
@@ -506,12 +508,14 @@ class Handler(BaseHTTPRequestHandler):
             if prepare:
                 job = self.server.import_jobs.create(metadata, upload=temporary, filename=filename)
                 return self.json_response({"job": job}, 202)
+            allow_native_opus = metadata.pop("allowNativeOpus", True)
             if "metadataMode" in metadata:
                 details = merge_metadata(local_metadata(temporary, filename=filename), {
                     "metadataMode": metadata.pop("metadataMode"), "metadata": metadata,
                 })
                 metadata = {**metadata, **details}
-            track = self.server.library.import_file(temporary, metadata, filename=filename)
+            track = self.server.library.import_file(temporary, metadata, filename=filename,
+                                                    allow_native_opus=allow_native_opus)
             self.json_response({"track": track}, 201)
         finally:
             with contextlib.suppress(FileNotFoundError):

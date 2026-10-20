@@ -17,6 +17,7 @@ from .library import LibraryError, MAX_AUDIO_BYTES, clean_text, metadata_values,
 from .import_sources import acquire_youtube, local_metadata, normalize_youtube_url
 from .audio_prepare import prepare_audio, parse_timestamp
 from .youtube_auth import YouTubeAuth, YouTubeSession
+from .storage_policy import reject_quality_options, native_opus
 
 
 def process_exists(pid):
@@ -143,6 +144,8 @@ class ImportJobs:
         if not isinstance(options, dict):
             raise LibraryError("Import options must be an object.")
         options = copy.deepcopy(options)
+        reject_quality_options(options)
+        options["allowNativeOpus"] = native_opus(options.get("allowNativeOpus", True))
         metadata_options(options)
         for key in ("exact", "loop"):
             if key in options and not isinstance(options[key], bool):
@@ -231,7 +234,7 @@ class ImportJobs:
             # Check all bounds and editable fields before offering a preview.
             metadata_values(metadata, filename or "YouTube audio", duration)
             analysis["notes"] = notes + analysis.get("notes", [])
-            manifest = {"metadata": metadata, "options": options, "analysis": analysis}
+            manifest = {"metadata": metadata, "options": options, "analysis": analysis, "storage": prepared.get("storage")}
             (directory / "preparation.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             with self.lock:
                 if self.closed or job["status"] == "cancelled":
@@ -240,6 +243,7 @@ class ImportJobs:
                            analysis=analysis, duration=prepared["duration"], fileDuration=duration,
                            loopStart=metadata.get("loopStart", 0), loopEnd=metadata.get("loopEnd"),
                            audioUrl=f"/api/import-jobs/{identifier}/audio", _file=output, _touched=time.monotonic())
+                job["storage"] = prepared.get("storage")
         except Exception as exc:
             with self.lock:
                 if job["status"] != "cancelled":
@@ -265,6 +269,7 @@ class ImportJobs:
     def commit(self, identifier, changes):
         if not isinstance(changes, dict):
             raise LibraryError("Song details must be an object.")
+        reject_quality_options(changes)
         with self.lock:
             job = self._get(identifier)
             if job["status"] == "complete":
@@ -277,7 +282,7 @@ class ImportJobs:
             metadata_values(metadata, "Untitled", job["fileDuration"])
             job["status"] = "saving"
         try:
-            track = self.library.import_file(job["_file"], metadata)
+            track = self.library.import_file(job["_file"], metadata, _provenance=job.get("storage"))
         except Exception:
             with self.lock:
                 job["status"] = "ready"

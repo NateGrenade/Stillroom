@@ -20,6 +20,14 @@ In **Settings → YouTube account**, optionally select a browser signed in to Yo
 
 See the included **Read Me.txt** for details, limits, and troubleshooting. Release ZIPs contain the app source and bundled component licenses, but never a user's songs, library, or account cookies.
 
+## Playback and imports in 1.6.0
+
+Click the current speed readout for a continuous **0.5×–2×** slider with gentle preset snapping. **Pitch follows speed** starts on; turn it off to preserve the original pitch. Advanced options contains added reverb, off by default. Collapse recommendations to keep the page compact without stopping their audio. These choices are remembered in your browser.
+
+Desktop Chrome and Firefox support reverb for songs, loops and recommendations. Safari/WebKit keeps ordinary songs and recommendations on native dry playback with a compatibility notice; prepared loops still support reverb. Time stretching can alter musical texture at extreme speeds.
+
+Future imports retain compatible compressed source audio, remux compatible Opus without re-encoding, and use an AAC compatibility copy when required. Existing library audio is not bulk-converted. Pitch-preserving loops retain one PCM owner and reuse it through pauses and seeks, with no decoded disk cache.
+
 ## Song sharing in 1.5.2
 
 Choose a song’s **⋯ → Share song**. Copy a recognized YouTube source link, or download one fresh M4A copy for an uploaded or imported song. Choose whether to include the displayed title, artist, and album. A saved loop exports one pass through its region. Nothing uploads automatically; send the downloaded file yourself and share only audio you have the right to share. Recipients can use **Add music → Audio files**. Source access, loop settings, and playlists are not transferred.

@@ -1,3 +1,5 @@
+import { storageDescription, supportsNativeOpus } from './audio-storage.js';
+
 /** Reviewable audio imports. A prepared job is only saved after the user accepts it. */
 export function parseTimestamp(value) {
   const text = String(value ?? '').trim();
@@ -173,7 +175,7 @@ export class ImportDialog {
     });
     this.$('#upload-zone').addEventListener('drop', event => {
       if (this.busy) return;
-      const files = [...event.dataTransfer.files].filter(file => file.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|flac|aiff?|webm)$/i.test(file.name));
+      const files = [...event.dataTransfer.files].filter(file => file.type.startsWith('audio/') || /\.(mp3|wav|m4a|aac|ogg|opus|flac|aiff?|webm)$/i.test(file.name));
       this.selectFiles(files);
       if (!files.length) this.status('Choose an audio file to add to your library.');
     });
@@ -192,7 +194,7 @@ export class ImportDialog {
   options() {
     const start = this.$('#import-start').value.trim(), end = this.$('#import-end').value.trim();
     validateTimes(start, end);
-    return { metadataMode: this.metadataMode, metadata: this.metadataMode === 'manual' ? this.metadata() : {}, start, end, exact: this.$('#import-exact').checked, loop: this.$('#import-loop').checked };
+    return { metadataMode: this.metadataMode, metadata: this.metadataMode === 'manual' ? this.metadata() : {}, start, end, exact: this.$('#import-exact').checked, loop: this.$('#import-loop').checked, allowNativeOpus: supportsNativeOpus() };
   }
   render() {
     const ready = this.job?.status === 'ready';
@@ -247,9 +249,13 @@ export class ImportDialog {
     const addFact = (label, value) => { const term = document.createElement('dt'), detail = document.createElement('dd'); term.textContent = label; detail.textContent = value; facts.append(term, detail); };
     addFact('Source range', `${preciseTime(analysis.appliedStart)} – ${preciseTime(analysis.appliedEnd)}`);
     addFact(isLoop ? 'Loop length' : 'Track length', preciseTime(job.duration));
+    if (job.storage) {
+      addFact('Source audio', storageDescription(job.storage.source));
+      addFact('Saved audio', storageDescription(job.storage.stored));
+    }
     if (analysis.requestedStart != null || analysis.requestedEnd != null) addFact('Requested', `${preciseTime(analysis.requestedStart ?? 0)} – ${preciseTime(analysis.requestedEnd ?? analysis.sourceDuration)}`);
     const notes = this.$('#import-analysis-notes'); notes.replaceChildren();
-    for (const note of analysis.notes || []) { const item = document.createElement('li'); item.textContent = String(note); notes.append(item); }
+    for (const note of new Set([...(analysis.notes || []), ...(job.storage?.note ? [job.storage.note] : [])])) { const item = document.createElement('li'); item.textContent = String(note); notes.append(item); }
     notes.hidden = !notes.children.length;
     const audio = this.$('#import-preview-audio'); audio.pause(); audio.hidden = isLoop; audio.volume = this.getVolume();
     this.$('#import-loop-controls').hidden = !isLoop;
@@ -310,7 +316,7 @@ export class ImportDialog {
   async importBatch() {
     this.phase = 'batch'; this.render();
     const files = [...this.files], failed = []; let added = 0;
-    const metadata = { kind: this.$('#import-kind').value, metadataMode: this.metadataMode, ...(this.metadataMode === 'manual' ? this.metadata() : {}) };
+    const metadata = { kind: this.$('#import-kind').value, metadataMode: this.metadataMode, allowNativeOpus: supportsNativeOpus(), ...(this.metadataMode === 'manual' ? this.metadata() : {}) };
     delete metadata.title;
     for (const [index, file] of files.entries()) {
       this.status(`Adding ${index + 1} of ${files.length}: ${file.name}`);

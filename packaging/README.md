@@ -1,13 +1,17 @@
 # Portable releases
 
-Builds contain an empty library. Review source and final archives for security and personal data before distributing them. Keep build and security reports local; only reviewed source and intended release assets belong in the public repository.
+Release packaging is an explicit step after Nathan tests the local app. Ordinary changes stop at local development; do not automatically build ZIPs, bump versions, or publish. Invoke $stillroom-package to build and verify local packages, or request `$stillroom-package and publish` to also release them on GitHub.
+
+Every packaging run requires a **separate security review** of the app and every final archive before delivery or any upload/publication. This includes local-only packages and drafts. Check for credentials, API keys, cookies/session files, private keys, user music, library/account data, and other material vulnerabilities. Record an independent review result and the final artifact hashes under `research/`; unresolved findings block release. Functional tests, archive checks, and prior security reviews do not replace this check. Follow the maintainer's local Stillroom packaging skill and its security-review procedure.
 
 The builder produces two empty-library archives in `~/Desktop/Stillroom Releases`:
 
-- `Stillroom-1.5.2-Mac.zip`: Apple Silicon and Intel, macOS 11 or newer.
-- `Stillroom-1.5.2-Windows-x64.zip`: 64-bit Intel/AMD, Windows 10 22H2 or Windows 11.
+- `Stillroom-1.6.0-Mac.zip`: Apple Silicon and Intel, macOS 11 or newer.
+- `Stillroom-1.6.0-Windows-x64.zip`: 64-bit Intel/AMD, Windows 10 22H2 or Windows 11.
 
 Extract the entire folder to a writable location and double-click `Start Stillroom.command` (Mac) or `Start Stillroom.cmd` (Windows). Each package carries Python, Node.js, yt-dlp, and FFmpeg/ffprobe. The source library is never copied. `audio/`, `data/`, and `imports/` are created only after launch. Use the original ZIP when sharing an empty copy.
+
+Version 1.6.0 adds continuous 0.5×–2× playback speed with an optional pitch-preserving mode, compact animated speed controls, a remembered recommendations disclosure, and added reverb under Advanced options. Desktop Chrome and Firefox support reverb for songs, prepared loops and recommendations; Safari/WebKit preserves native dry playback for songs and recommendations with a compatibility notice, while loop reverb works. Source-aware imports keep compatible compressed originals, remux compatible Opus without re-encoding and use an AAC compatibility fallback when needed. Selected pitch-preserving loops retain one PCM owner; no decoded disk cache is introduced. Existing library audio is not bulk-converted.
 
 Version 1.5.2 adds **⋯ → Share song**. Copy a recognized YouTube source link or download one freshly encoded M4A, with an explicit option to include only the displayed title, artist, and album. Original embedded metadata, artwork, chapters, source links, playlists, and library/account information are stripped from the audio copy. A saved loop exports one pass through its saved region. The downloaded file stays local until you send it, and recipients can import it through **Add music → Audio files**. Only share audio you have the right to share.
 
@@ -68,7 +72,7 @@ Building creates local files only. It does not publish a GitHub Release. The upd
 
 1. Set both `app/__init__.py` (`__version__`) and `packaging/build_portable.py` (`VERSION`) to the same new stable version and run the build and verification steps above. Use a version greater than the last published release; downgrades and same-version installs are rejected. Preserve previously published files and assets.
 2. Create a stable release in `NateGrenade/Stillroom` with the tag `v<version>` (for example, `v1.5.0`). Do not mark it as a draft or prerelease; the updater reads GitHub's latest stable release endpoint.
-3. Attach the generated assets with their exact names: `Stillroom-<version>-Mac.zip`, `Stillroom-<version>-Windows-x64.zip`, and `SHA256SUMS.txt`. For 1.5.2 these are `Stillroom-1.5.2-Mac.zip` and `Stillroom-1.5.2-Windows-x64.zip`. Keep each ZIP's contents and internal checksums unchanged.
+3. Attach the generated assets with their exact names: `Stillroom-<version>-Mac.zip`, `Stillroom-<version>-Windows-x64.zip`, and `SHA256SUMS.txt`. For 1.6.0 these are `Stillroom-1.6.0-Mac.zip` and `Stillroom-1.6.0-Windows-x64.zip`. Keep each ZIP's contents and internal checksums unchanged.
 4. Upload the builder's adjacent `SHA256SUMS.txt`, which contains the SHA-256 digest and exact filename for each release ZIP. GitHub's asset SHA-256 digest is used when available; this file supplies the fallback. Do not rename an asset without rebuilding the corresponding metadata.
 5. Publish the release with both platform ZIPs and checksums attached. From an older disposable packaged copy, choose **Check for updates** and verify download, installation, restart, and library persistence before distributing the update broadly.
 
@@ -82,7 +86,7 @@ node --test tests/*.test.mjs
 python3 packaging/verify_archives.py
 ```
 
-`verify_archives.py` requires both current-version ZIPs and verifies archive integrity, every file checksum, executable permissions, the version and platform manifests, the playlist, account-settings, and update UI, and an exact match with current Python and browser sources. It also checks that no library or audio files were included. Its report is `research/archive-qa-1.5.2.json`.
+`verify_archives.py` requires both current-version ZIPs and verifies archive integrity, every file checksum, executable permissions, the version and platform manifests, the playlist, account-settings, and update UI, and an exact match with current Python and browser sources. It also checks that no library or audio files were included. Its report is `research/archive-qa-1.6.0.json`.
 
 `verify_mac_package.py` exercises a disposable **extracted copy** with `PATH=/usr/bin:/bin`. It checks bundled tools, empty initial state, the Spotify review interface, uploads, exact trimming, loop preparation, byte-range previews, saving, shutdown, and persistence after restart. Its optional `--youtube` flag verifies live public-video acquisition. Never point this script at a library you wish to keep: it intentionally adds synthetic test tracks. Use a separate fresh extraction for each architecture. Live Spotify playlist checks, including the supplied Casual Christmas playlist, must also use a disposable library and must never import into the source collection.
 

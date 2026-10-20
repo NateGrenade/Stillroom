@@ -1,15 +1,21 @@
 import { youtubeUrl } from './playlist-import.js';
+import { supportsNativeOpus } from './audio-storage.js';
+import { SpeedControl } from './playback-controls.js';
+import { MEDIA_EFFECTS_UNSUPPORTED, NATIVE_MEDIA_REVERB_MESSAGE } from './audio-effects.js';
 
 /** Recommendation audio is acquired only by listen(). Library playback remains separate. */
 const terminal = new Set(['limbo', 'rejected', 'error']);
 const escapeText = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const json = body => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const newId = () => globalThis.crypto.randomUUID();
+const playbackRate = value => { const rate = Number(value); return Number.isFinite(rate) ? Math.max(.5, Math.min(2, rate)) : 1; };
+const reverbAmount = value => { const amount = Number(value); return Number.isFinite(amount) ? Math.max(0, Math.min(1, amount)) : 0; };
+const effectsMessage = error => error?.code === MEDIA_EFFECTS_UNSUPPORTED ? NATIVE_MEDIA_REVERB_MESSAGE : 'Reverb could not start. Playback can continue without the effect.';
 
 /** Credits media seconds actually advanced while playing; pauses and buffer waits add nothing. */
 export class ListenTracker {
-  constructor(now = () => performance.now()) { this.now = now; this.reset(); }
-  reset() { this.seconds = 0; this.position = 0; this.at = this.now(); this.playing = false; this.rate = 1; this.peakRate = 1; this.seeked = false; this.ended = false; }
+  constructor(now = () => performance.now(), getPlayed = () => null) { this.now = now; this.getPlayed = getPlayed; this.reset(); }
+  reset(rate = 1) { this.seconds = 0; this.position = 0; this.at = this.now(); this.playing = false; this.rate = playbackRate(rate); this.peakRate = this.rate; this.seeked = false; this.ended = false; }
   sample(position) {
     const at = this.now(), next = Math.max(0, Number(position) || 0);
     const delta = next - this.position, available = Math.max(0, (at - this.at) / 1000) * this.rate;
@@ -19,28 +25,50 @@ export class ListenTracker {
       this.seconds += Math.min(delta, available);
     }
     this.position = next; this.at = at;
+    // Native media and JavaScript clocks do not advance in lockstep. In
+    // particular, pause/playing events can expose a late media position. The
+    // browser's played ranges retain that actual audio coverage without adding
+    // paused or buffering wall time. Keep the sampled fallback for other media.
+    try {
+      const played = this.getPlayed(); let seconds = 0;
+      if (!played || !Number.isInteger(played.length) || played.length < 0) return;
+      for (let i = 0; i < played.length; i++) {
+        const start = played.start(i), end = played.end(i);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start) return;
+        seconds += Math.max(0, Math.min(next, end) - start);
+      }
+      this.seconds = Math.max(this.seconds, seconds);
+    } catch { /* Sampling still works when played ranges are unavailable. */ }
   }
   setPlaying(playing, position, rate = this.rate) { this.sample(position); this.playing = playing; this.rate = Math.max(.25, Math.min(4, Number(rate) || 1)); this.peakRate = Math.max(this.peakRate, this.rate); }
   seek(position) { this.sample(position); this.seeked = true; }
-  snapshot(position) { this.sample(position); return { position: this.position, listenedSeconds: this.seconds, seeked: this.seeked, playbackRate: this.peakRate }; }
+  snapshot(position) { this.sample(position); return { position: this.position, listenedSeconds: this.seconds, seeked: this.seeked, playbackRate: this.peakRate, peakRate: this.peakRate }; }
   completed(duration) { return !this.seeked && Number.isFinite(duration) && duration > 0 && this.seconds >= duration * .95; }
 }
 
 export class RecommendationPlayer {
-  constructor({ audio, api, onChange = () => {}, onLibraryChange = () => {}, beforePlay = () => {}, now, id = newId, storage = null, schedule = (...args) => setTimeout(...args), cancel = timer => clearTimeout(timer) }) {
-    Object.assign(this, { audio, api, onChange, onLibraryChange, beforePlay, id, storage });
+  constructor({ audio, api, audioRoute = null, reverb = 0, onChange = () => {}, onLibraryChange = () => {}, onPlaybackRateChange = () => {}, beforePlay = () => {}, playbackRate: rate = 1, pitchChanges = true, now, id = newId, storage = null, schedule = (...args) => setTimeout(...args), cancel = timer => clearTimeout(timer) }) {
+    Object.assign(this, { audio, api, onChange, onLibraryChange, onPlaybackRateChange, beforePlay, id, storage });
     this.schedule = (...args) => schedule(...args); this.cancel = timer => cancel(timer);
-    this.tracker = new ListenTracker(now); this.session = null; this.busy = false; this.error = ''; this.generation = 0;
+    this.tracker = new ListenTracker(now, () => audio.played); this.session = null; this.busy = false; this.error = ''; this.generation = 0;
     this.queue = Promise.resolve(); this.pendingAction = null; this.pollTimer = null; this.progressTimer = null; this.closed = false; this.playIntent = 0; this.active = false; this.retainOnly = false;
     this.libraryIds = new Set(); this.removedTrackIds = new Set();
+    this.audioRoute = audioRoute; this.reverb = reverbAmount(reverb); this.effectsError = ''; this.effectsIntent = 0;
+    if (this.audioRoute) void this.audioRoute.setReverb(this.reverb);
     this.audio.preload = 'none'; this.audio.loop = false;
+    this.playbackRate = playbackRate(rate); this.pitchChanges = Boolean(pitchChanges); this.tracker.reset(this.playbackRate); this.applyPlaybackSettings();
     this.handlers = {
       play: () => { if (this.session && !terminal.has(this.session.status)) this.beforePlay(); },
       playing: () => { this.tracker.setPlaying(true, audio.currentTime, audio.playbackRate); this.emit(); },
       pause: () => { this.tracker.setPlaying(false, audio.currentTime); this.emit(); },
       waiting: () => this.tracker.setPlaying(false, audio.currentTime),
       timeupdate: () => this.tracker.sample(audio.currentTime),
-      ratechange: () => { this.tracker.setPlaying(this.tracker.playing, audio.currentTime, audio.playbackRate); if (audio.playbackRate !== this.tracker.rate) audio.playbackRate = this.tracker.rate; },
+      ratechange: () => {
+        const rate = playbackRate(audio.playbackRate), changed = rate !== this.playbackRate;
+        this.setPlaybackRate(rate);
+        if (changed) this.onPlaybackRateChange(rate);
+      },
+      loadedmetadata: () => this.applyPlaybackSettings(),
       seeking: () => this.tracker.seek(audio.currentTime),
       ended: () => { if (this.tracker.ended) return; this.tracker.sample(audio.currentTime); this.tracker.ended = true; this.tracker.playing = false; void this.finish(this.tracker.completed(Number(audio.duration) || Number(this.session?.track?.duration)) ? 'complete' : 'skip'); },
       error: () => { if (!this.session || terminal.has(this.session.status)) return; this.error = 'This recommendation could not play. Skip to release its temporary audio, or try Play again.'; this.emit(); },
@@ -48,6 +76,46 @@ export class RecommendationPlayer {
     for (const [name, handler] of Object.entries(this.handlers)) audio.addEventListener(name, handler);
   }
   emit() { this.onChange(this); }
+  applyPlaybackSettings() {
+    // Account for the interval at its old rate before mutating the media element.
+    this.tracker.setPlaying(this.tracker.playing, this.audio.currentTime, this.playbackRate);
+    if (this.audio.defaultPlaybackRate !== this.playbackRate) this.audio.defaultPlaybackRate = this.playbackRate;
+    if (this.audio.playbackRate !== this.playbackRate) this.audio.playbackRate = this.playbackRate;
+    for (const name of ['preservesPitch', 'webkitPreservesPitch', 'mozPreservesPitch']) {
+      if (name in this.audio) { try { this.audio[name] = !this.pitchChanges; } catch {} }
+    }
+  }
+  setPlaybackRate(value) { this.playbackRate = playbackRate(value); this.applyPlaybackSettings(); this.emit(); }
+  setPitchChanges(value) { this.pitchChanges = Boolean(value); this.applyPlaybackSettings(); this.emit(); }
+  async setReverb(value) {
+    const intent = ++this.effectsIntent;
+    this.reverb = reverbAmount(value); this.effectsError = '';
+    try {
+      const result = this.audioRoute ? await this.audioRoute.setReverb(this.reverb) : true;
+      if (intent !== this.effectsIntent || this.closed) return;
+      if (result === false) this.effectsError = effectsMessage(this.audioRoute?.error);
+    } catch { if (intent !== this.effectsIntent || this.closed) return; this.effectsError = 'Reverb could not start. Playback can continue without the effect.'; }
+    if (!this.closed) this.emit();
+  }
+  setVolume(value) {
+    const volume = Number(value); if (!Number.isFinite(volume)) return;
+    if (this.audioRoute) this.audioRoute.setVolume(volume);
+    else this.audio.volume = Math.max(0, Math.min(1, volume));
+  }
+  async playAudio(generation = this.generation, intent = this.playIntent) {
+    const prepared = this.audioRoute ? await this.audioRoute.prepare() : true;
+    if (generation !== this.generation || intent !== this.playIntent || this.closed) return false;
+    if (prepared === false && this.reverb) this.effectsError = effectsMessage(this.audioRoute?.error);
+    await this.audio.play(); return true;
+  }
+  async resume() {
+    if (this.closed || this.busy || this.pendingAction || !['ready', 'retained'].includes(this.session?.status)) return;
+    const generation = this.generation, intent = this.playIntent;
+    this.beforePlay();
+    try { if (!await this.playAudio(generation, intent)) return; this.error = ''; }
+    catch { if (generation !== this.generation || intent !== this.playIntent || this.closed) return; this.error = 'Ready to listen. Press Play below to start.'; }
+    if (!this.closed) this.emit();
+  }
   remember(id) { try { if (id) this.storage?.setItem('stillroom:recommendation-session', id); else this.storage?.removeItem('stillroom:recommendation-session'); } catch {} }
   async recover() {
     let previous; try { previous = this.storage?.getItem('stillroom:recommendation-session'); } catch {}
@@ -90,15 +158,15 @@ export class RecommendationPlayer {
       if (this.pendingAction) return;
     }
     const generation = ++this.generation;
-    this.busy = true; this.active = !retainOnly; this.retainOnly = retainOnly; this.error = ''; this.session = null; this.pendingAction = null; this.stopAudio(); this.tracker.reset(); this.emit();
+    this.busy = true; this.active = !retainOnly; this.retainOnly = retainOnly; this.error = ''; this.session = null; this.pendingAction = null; this.stopAudio(); this.tracker.reset(this.playbackRate); this.emit();
     if (!retainOnly) this.beforePlay();
     try {
-      const { session } = await this.api(`/api/recommendations/${encodeURIComponent(candidateId)}/listen`, json({ requestId: this.id() }));
+      const { session } = await this.api(`/api/recommendations/${encodeURIComponent(candidateId)}/listen`, json({ requestId: this.id(), allowNativeOpus: supportsNativeOpus(() => this.audio) }));
       if (generation !== this.generation || this.closed) { void this.closeStale(session); return; }
       this.session = session; this.remember(retainOnly ? null : session.id);
       if (session.status === 'preparing') this.poll(generation); else await this.ready(session, generation);
     } catch (error) { if (generation === this.generation) { this.active = false; this.error = error.message; } }
-    finally { if (generation === this.generation) { this.busy = false; this.emit(); } }
+    finally { if (generation === this.generation) { this.busy = false; this.emit(); if (!this.active && !this.retainOnly && ['preparing', 'ready'].includes(this.session?.status)) void this.finish('skip'); } }
   }
   async closeStale(session) {
     if (!session?.id) return;
@@ -122,9 +190,9 @@ export class RecommendationPlayer {
     if (terminal.has(session.status)) { this.active = false; this.error = session.status === 'error' ? session.message || 'Audio could not be prepared. Try listening again.' : ''; this.remember(null); return; }
     if (session.status === 'retained' && this.retainOnly) { this.active = false; this.remember(null); this.onLibraryChange(); return; }
     if (!session.track?.audioUrl) throw new Error('The audio is not available yet. Try listening again.');
-    this.audio.src = session.track.audioUrl; this.audio.loop = false;
+    this.audio.src = session.track.audioUrl; this.audio.loop = false; this.applyPlaybackSettings();
     this.beforePlay();
-    try { await this.audio.play(); } catch { if (generation === this.generation) this.error = 'Ready to listen. Press Play below to start.'; }
+    try { await this.playAudio(generation); } catch { if (generation === this.generation) this.error = 'Ready to listen. Press Play below to start.'; }
     if (generation !== this.generation || this.closed) return;
     this.scheduleProgress(generation);
   }
@@ -152,7 +220,7 @@ export class RecommendationPlayer {
     const payload = this.pendingAction || { eventId: this.id(), type, ...this.tracker.snapshot(this.audio.currentTime) };
     this.pendingAction = payload; this.busy = true; this.error = ''; this.cancel(this.pollTimer);
     const wasPlaying = !this.audio.paused, position = this.audio.currentTime;
-    if (payload.type === 'up' && this.session.status === 'limbo') { this.retainOnly = true; this.tracker.reset(); }
+    if (payload.type === 'up' && this.session.status === 'limbo') { this.retainOnly = true; this.tracker.reset(this.playbackRate); }
     this.audio.pause();
     if (payload.type !== 'up') { this.active = false; this.stopAudio(); }
     this.emit();
@@ -166,8 +234,8 @@ export class RecommendationPlayer {
       if (session.status !== 'ready') this.remember(null);
       if (session.status === 'preparing') this.poll(generation);
       if (payload.type === 'up' && session.status === 'retained' && !this.retainOnly) {
-        if (session.track?.audioUrl && this.audio.getAttribute('src') !== session.track.audioUrl) { this.audio.src = session.track.audioUrl; this.audio.currentTime = position; }
-        if (wasPlaying && playIntent === this.playIntent) { this.beforePlay(); try { await this.audio.play(); } catch {} }
+        if (session.track?.audioUrl && this.audio.getAttribute('src') !== session.track.audioUrl) { this.audio.src = session.track.audioUrl; this.audio.currentTime = position; this.applyPlaybackSettings(); }
+        if (wasPlaying && playIntent === this.playIntent) { this.beforePlay(); try { await this.playAudio(generation, playIntent); } catch {} }
       }
       if (['retained', 'rejected'].includes(session.status)) this.onLibraryChange();
     } catch (error) { if (generation === this.generation) this.error = `${error.message} Your action has not been confirmed. Use Retry to send it again safely.`; }
@@ -188,14 +256,23 @@ export class RecommendationPlayer {
     this.stopAudio();
     if (session && ((!terminal.has(session.status) && !this.retainOnly) || this.pendingAction)) void this.api(`/api/recommendation-sessions/${encodeURIComponent(session.id)}/events`, { ...json(payload), keepalive: true }).catch(() => {});
   }
-  destroy() { this.pagehide(); for (const [name, handler] of Object.entries(this.handlers)) this.audio.removeEventListener(name, handler); }
+  destroy() { this.pagehide(); for (const [name, handler] of Object.entries(this.handlers)) this.audio.removeEventListener(name, handler); this.audioRoute?.destroy(); }
 }
 
 export class RecommendationPanel {
-  constructor({ root, api, pauseMain, getVolume, refreshLibrary, storage = null, schedule = (...args) => setTimeout(...args), cancel = timer => clearTimeout(timer) }) {
+  constructor({ root, api, pauseMain, getVolume, refreshLibrary, playbackRate = 1, pitchChanges = true, reverb = 0, createMediaRoute = null, speedControlFactory = options => new SpeedControl(options), onPlaybackRateChange = null, onPitchChangesChange = null, storage = null, schedule = (...args) => setTimeout(...args), cancel = timer => clearTimeout(timer) }) {
     Object.assign(this, { root, api }); this.schedule = (...args) => schedule(...args); this.cancel = timer => cancel(timer); this.closed = false; this.snapshot = null; this.loading = false; this.error = ''; this.refreshTimer = null; this.loadGeneration = 0; this.lastTerminal = '';
     this.$ = selector => root.querySelector(selector);
-    this.player = new RecommendationPlayer({ audio: this.$('audio'), api, storage, beforePlay: () => { pauseMain(); this.player.audio.volume = getVolume(); }, onChange: () => this.renderPlayer(), onLibraryChange: () => { void refreshLibrary({ quiet: true }); } });
+    this.onPlaybackRateChange = onPlaybackRateChange || (value => this.setPlaybackSettings({ playbackRate: value }));
+    this.onPitchChangesChange = onPitchChangesChange || (value => this.setPlaybackSettings({ pitchChanges: value }));
+    const audio = this.$('audio');
+    const audioRoute = createMediaRoute?.(audio, error => {
+      if (!this.closed && this.player?.reverb) { this.player.effectsError = effectsMessage(error); this.renderPlayer(); }
+    }, () => {
+      if (!this.closed && this.player) { this.player.error = 'Ready to listen. Press Play below to start.'; this.renderPlayer(); }
+    });
+    this.player = new RecommendationPlayer({ audio, api, storage, playbackRate, pitchChanges, reverb, audioRoute, onPlaybackRateChange: value => this.onPlaybackRateChange(value), beforePlay: () => { pauseMain(); this.player.setVolume(getVolume()); }, onChange: () => this.renderPlayer(), onLibraryChange: () => { void refreshLibrary({ quiet: true }); } });
+    this.speedControl = speedControlFactory({ root: this.$('#recommendation-speed-control'), playbackRate, pitchChanges, onPlaybackRateChange: value => this.onPlaybackRateChange(value), onPitchChangesChange: value => this.onPitchChangesChange(value) });
     root.addEventListener('click', event => {
       const button = event.target.closest('button'); if (!button) return;
       if (button.dataset.listen) void this.player.listen(button.dataset.listen, { retainOnly: button.dataset.keep === 'true' });
@@ -236,12 +313,13 @@ export class RecommendationPanel {
   }
   renderPlayer() {
     const player = this.player; if (!player) return;
+    this.speedControl?.setPlaybackSettings({ playbackRate: player.playbackRate, pitchChanges: player.pitchChanges });
     const session = player.session;
     this.$('#recommendation-now').hidden = !session && !player.busy && !player.error;
     this.$('#recommendation-now-title').textContent = session?.track?.title || session?.candidate?.title || 'Preparing your recommendation…';
     this.$('#recommendation-now-artist').textContent = session?.track?.artist || session?.candidate?.artist || '';
     const messages = { preparing: 'Preparing audio for this listen…', ready: `Listening temporarily · ${session?.completedListens || 0} of 3 full listens`, retained: 'Kept in your library.', limbo: `Back in limbo · ${session?.completedListens || 0} of 3 full listens. Temporary audio released; its details stay for another day.`, rejected: 'Removed from suggestions. Your feedback will shape future recommendations.', error: 'Audio could not be prepared. You can try listening again.' };
-    this.$('#recommendation-now-status').textContent = player.error || (player.busy ? (session ? 'Saving your choice…' : 'Preparing audio for this listen…') : session?.message || messages[session?.status] || '');
+    this.$('#recommendation-now-status').textContent = player.error || player.effectsError || (player.busy ? (session ? 'Saving your choice…' : 'Preparing audio for this listen…') : session?.message || messages[session?.status] || '');
     this.$('audio').hidden = !session || !['ready', 'retained'].includes(session.status) || !!player.pendingAction || !player.audio.getAttribute('src');
     this.$('#recommendation-feedback').hidden = !session || !['ready', 'preparing', 'retained', 'limbo'].includes(session.status);
     this.root.querySelectorAll('[data-feedback]').forEach(button => { button.disabled = (button.dataset.feedback === 'skip' && (!player.active || player.retainOnly)) || player.busy || !!player.pendingAction || (button.dataset.feedback === 'up' && !['ready', 'limbo'].includes(session?.status)); });
@@ -256,6 +334,12 @@ export class RecommendationPanel {
     const terminalKey = session && ['retained', 'limbo', 'rejected', 'error'].includes(session.status) ? `${session.id}:${session.status}` : '';
     if (terminalKey && terminalKey !== this.lastTerminal) { this.lastTerminal = terminalKey; void this.load(); }
   }
+  setPlaybackSettings({ playbackRate = this.player.playbackRate, pitchChanges = this.player.pitchChanges, reverb = this.player.reverb }) {
+    if (playbackRate !== this.player.playbackRate) this.player.setPlaybackRate(playbackRate);
+    if (pitchChanges !== this.player.pitchChanges) this.player.setPitchChanges(pitchChanges);
+    if (reverb !== this.player.reverb) void this.player.setReverb(reverb);
+    this.renderPlayer();
+  }
   setLibrary(tracks) {
     const select = this.$('#recommendation-seed'), selected = select.value;
     select.innerHTML = '<option value="">All your library</option>' + tracks.map(track => `<option value="${escapeText(track.id)}">${escapeText(track.title)} — ${escapeText(track.artist || 'Unknown artist')}</option>`).join('');
@@ -265,7 +349,7 @@ export class RecommendationPanel {
   }
   setVisible(visible) { this.root.hidden = !visible; if (!visible) this.player.interrupt(); }
   interrupt() { this.player.interrupt(); }
-  pagehide() { this.closed = true; ++this.loadGeneration; this.cancel(this.refreshTimer); this.player.pagehide(); }
+  pagehide() { this.closed = true; ++this.loadGeneration; this.cancel(this.refreshTimer); this.speedControl?.destroy(); this.player.destroy(); }
 }
 
 /** Loading only interrupts when the main player still intends to autoplay. */

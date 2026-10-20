@@ -16,6 +16,7 @@ from .spotify_playlists import read_spotify_playlist
 from .youtube_playlists import read_youtube_playlist, normalize_youtube_playlist_url
 from .playlist_matching import search_candidates
 from .youtube_auth import YouTubeAuth
+from .storage_policy import reject_quality_options, native_opus
 
 MAX_ROWS = 100
 ACTIVE = {'reading', 'matching', 'importing'}
@@ -86,6 +87,8 @@ class PlaylistImports:
         source = options.get('source', 'spotify')
         if source not in ('spotify', 'youtube'):
             raise LibraryError('Choose a Spotify or YouTube playlist.')
+        reject_quality_options(options)
+        allow_native_opus = native_opus(options.get('allowNativeOpus', True))
         url = normalize_youtube_playlist_url(options['url']) if source == 'youtube' else options['url']
         enabled = options.get('useYouTubeAccount', False)
         if source != 'youtube' and enabled:
@@ -97,7 +100,8 @@ class PlaylistImports:
             identifier = uuid.uuid4().hex
             session = {'id': identifier, 'source': source, 'status': 'reading', 'title': '', 'url': '', 'notes': [],
                        'complete': False, 'total': None, 'rows': [], 'message': f"Reading the {'YouTube' if source == 'youtube' else 'public Spotify'} playlist…",
-                       'useYouTubeAccount': youtube_session is not None, '_youtube_session': youtube_session,
+                       'useYouTubeAccount': youtube_session is not None,
+                       'allowNativeOpus': allow_native_opus, '_youtube_session': youtube_session,
                        '_cancel': threading.Event(), '_touched': time.monotonic()}
             self.sessions[identifier] = session
             worker = threading.Thread(target=self._match, args=(session, url), daemon=True)
@@ -162,10 +166,15 @@ class PlaylistImports:
             raise LibraryError('Choose the tracks to import.')
         title = clean_text(options.get('title', ''), 'Playlist name', 120, required=True)
         choices = options.get('selections')
+        reject_quality_options(options)
+        if 'allowNativeOpus' in options:
+            native_opus(options['allowNativeOpus'])
         if not isinstance(choices, list) or not 1 <= len(choices) <= MAX_ROWS:
             raise LibraryError('Select between 1 and 100 tracks to import.')
         with self.lock:
             session = self._get(identifier)
+            if 'allowNativeOpus' in options and options['allowNativeOpus'] != session['allowNativeOpus']:
+                raise LibraryError('This playlist uses the playback support checked when it was loaded. Load it again to change playback support.')
             self._available(session)
             if session['status'] not in ('review', 'complete', 'cancelled') or session['_worker'].is_alive():
                 raise LibraryError('Wait for the playlist search or current import to finish.', 409)
@@ -274,7 +283,8 @@ class PlaylistImports:
                     auth = {'youtube_session': session['_youtube_session']} if session.get('_youtube_session') is not None else {}
                     job = self.import_jobs.create({'source': 'youtube', 'url': url, 'metadataMode': 'manual',
                                                   'metadata': {'title': source['title'], 'artist': source['artist'], 'album': source.get('album', '')},
-                                                  'exact': True, 'loop': False, 'useYouTubeAccount': bool(auth)}, **auth)
+                                                  'exact': True, 'loop': False, 'useYouTubeAccount': bool(auth),
+                                                  'allowNativeOpus': session['allowNativeOpus']}, **auth)
                     job_id = job['id']
                     with self.lock:
                         session['_job'] = job_id

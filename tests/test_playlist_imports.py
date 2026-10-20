@@ -66,6 +66,34 @@ class PlaylistImportTests(unittest.TestCase):
         self.assertEqual(len(session['rows']),3);self.assertEqual(self.jobs.calls,[])
         self.assertEqual(self.library.library()['tracks'],[]);self.assertEqual(self.library.library()['playlists'],[])
         session['rows'].clear();self.assertEqual(len(self.manager.get(session['id'])['rows']),3)
+
+    def test_playlist_playback_capability_is_frozen_for_new_jobs_and_retry(self):
+        created = self.manager.create({'url': playlist()['url'], 'allowNativeOpus': False})
+        session = self.settle(created['id'])
+        self.assertNotIn('storageProfile', session)
+        self.assertFalse(session['allowNativeOpus'])
+        with self.assertRaises(LibraryError):
+            self.manager.start_import(session['id'], {'title': 'Changed', 'allowNativeOpus': True,
+                                                     'selections': [{'rowId': '0', 'url': VIDEO}]})
+        self.assertEqual(self.jobs.calls, [])
+        self.jobs.fail.add('Song 0')
+        session = self.start(session, ('0',))
+        self.jobs.fail.clear()
+        self.start(session, ('0',))
+        self.assertEqual([call['allowNativeOpus'] for call in self.jobs.calls], [False, False])
+        self.assertTrue(all('storageProfile' not in call for call in self.jobs.calls))
+
+    def test_removed_quality_options_are_rejected_before_playlist_read_or_import(self):
+        for profile in ('source', 'compact128', None, True):
+            with self.subTest(profile=profile), patch('app.playlist_imports.read_spotify_playlist') as read:
+                with self.assertRaises(LibraryError):
+                    self.manager.create({'url': playlist()['url'], 'storageProfile': profile})
+                read.assert_not_called()
+        session = self.review()
+        with self.assertRaises(LibraryError):
+            self.manager.start_import(session['id'], {'title': 'Stale client', 'storageProfile': 'compact128',
+                                                     'selections': [{'rowId': '0', 'url': VIDEO}]})
+        self.assertEqual(self.jobs.calls, [])
     def test_selected_import_keeps_spotify_metadata_and_youtube_provenance(self):
         session=self.start(self.review(),('0','2'))
         self.assertEqual(session['status'],'complete');self.assertEqual([r['status'] for r in session['rows']],['saved','skipped','saved'])

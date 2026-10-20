@@ -109,7 +109,7 @@ test('Finding a playlist requests matches without authorizing an audio import', 
   await instance.find();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, '/api/playlist-imports');
-  assert.deepEqual(JSON.parse(calls[0].options.body), { url: 'https://open.spotify.com/playlist/123', source: 'spotify' });
+  assert.deepEqual(JSON.parse(calls[0].options.body), { url: 'https://open.spotify.com/playlist/123', source: 'spotify', allowNativeOpus: false });
   assert.equal(instance.session.status, 'matching');
 });
 
@@ -121,7 +121,7 @@ test('The import click sends only explicitly selected valid video links and the 
   await instance.importSelected();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, '/api/playlist-imports/session/import');
-  assert.deepEqual(JSON.parse(calls[0].options.body), { title: 'My playlist', selections: [{ rowId: 'good', url: good.url }] });
+  assert.deepEqual(JSON.parse(calls[0].options.body), { title: 'My playlist', selections: [{ rowId: 'good', url: good.url }], allowNativeOpus: true });
 });
 
 test('Import is disabled while matching and cannot start with no valid selection', async () => {
@@ -284,7 +284,7 @@ test('Loading a YouTube playlist sends its source without starting audio downloa
   await instance.find();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, '/api/playlist-imports');
-  assert.deepEqual(JSON.parse(calls[0].options.body), { source: 'youtube', url: 'https://www.youtube.com/playlist?list=PLabcdefghij12345', useYouTubeAccount: false });
+  assert.deepEqual(JSON.parse(calls[0].options.body), { source: 'youtube', url: 'https://www.youtube.com/playlist?list=PLabcdefghij12345', allowNativeOpus: false, useYouTubeAccount: false });
   assert.equal(instance.session.status, 'reading');
 });
 
@@ -370,4 +370,16 @@ test('Importing an existing playlist review cannot switch the account from its o
   await instance.importSelected();
   assert.equal(Object.hasOwn(calls[0], 'useYouTubeAccount'), false, 'The backend session retains its account authorization');
   assert.equal(instance.session.useYouTubeAccount, true);
+});
+
+test('playlist retries retain the review browser capability without quality options', async () => {
+  const requests = [], session = { id: 'session', status: 'review', allowNativeOpus: false, rows: [row('good')] };
+  const instance = controller(null, async (url, options) => { requests.push({ url, body: JSON.parse(options.body) }); return { session }; });
+  await instance.find();
+  assert.equal(requests[0].body.allowNativeOpus, false);
+  assert.equal(Object.hasOwn(requests[0].body, 'storageProfile'), false);
+  instance.choices = { good: { selected: true, url: good.url } };
+  await instance.importSelected();
+  assert.equal(requests[1].body.allowNativeOpus, false);
+  assert.equal(Object.hasOwn(requests[1].body, 'storageProfile'), false);
 });

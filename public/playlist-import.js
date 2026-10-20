@@ -1,3 +1,5 @@
+import { supportsNativeOpus } from './audio-storage.js';
+
 /** Import YouTube playlists directly, or review YouTube matches for Spotify tracks. */
 const FINISHED_ROWS = new Set(['saved', 'existing']);
 const ACTIVE_SESSIONS = new Set(['reading', 'matching', 'importing']);
@@ -273,7 +275,7 @@ export class PlaylistImportDialog {
     const generation = ++this.generation; clearTimeout(this.timer);
     try {
       const useYouTubeAccount = this.source === 'youtube' && this.$('#playlist-youtube-account')?.checked === true;
-      const result = await this.api('/api/playlist-imports', jsonOptions('POST', { url, source: this.source || 'spotify', ...(this.source === 'youtube' ? { useYouTubeAccount } : {}) }));
+      const result = await this.api('/api/playlist-imports', jsonOptions('POST', { url, source: this.source || 'spotify', allowNativeOpus: supportsNativeOpus(), ...(this.source === 'youtube' ? { useYouTubeAccount } : {}) }));
       if (generation !== this.generation) return;
       this.choices = {}; this.titleTouched = false; this.lastSaved = ''; this.$('#spotify-rows').replaceChildren();
       if (this.$('#playlist-youtube-account')) this.$('#playlist-youtube-account').checked = false;
@@ -327,7 +329,7 @@ export class PlaylistImportDialog {
     this.pending = true; this.error(''); this.render();
     const generation = ++this.generation; clearTimeout(this.timer);
     try {
-      const result = await this.api(`/api/playlist-imports/${encodeURIComponent(this.session.id)}/import`, jsonOptions('POST', { title, selections }));
+      const result = await this.api(`/api/playlist-imports/${encodeURIComponent(this.session.id)}/import`, jsonOptions('POST', { title, selections, allowNativeOpus: this.session.allowNativeOpus !== false }));
       if (generation !== this.generation) return;
       this.accept(result.session); this.schedule();
     } catch (error) { await this.recoverAction(error, generation); }

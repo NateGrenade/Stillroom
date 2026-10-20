@@ -89,6 +89,34 @@ class RecommendationTests(unittest.TestCase):
         self.assertEqual(self.library.library()['tracks'], [])
         self.assertEqual(self.jobs.creates, 0)
 
+    def test_preparation_and_reprepare_keep_browser_capability_without_quality_options(self):
+        with patch.object(self.jobs, 'create', wraps=self.jobs.create) as create:
+            session = self.service.listen(self.song['id'], {'requestId': uuid.uuid4().hex, 'allowNativeOpus': False})
+            self.assertEqual(create.call_args.args[0]['allowNativeOpus'], False)
+            self.assertNotIn('storageProfile', create.call_args.args[0])
+            session = self.service.get(session['id'])
+            session = self.event(session, 'skip')
+            self.event(session, 'up')
+            self.assertEqual(create.call_count, 2)
+            self.assertEqual(create.call_args.args[0]['allowNativeOpus'], False)
+            self.assertNotIn('storageProfile', create.call_args.args[0])
+
+    def test_different_browser_capability_does_not_reuse_incompatible_preview(self):
+        first = self.service.listen(self.song['id'], {'requestId': uuid.uuid4().hex, 'allowNativeOpus': True})
+        second = self.service.listen(self.song['id'], {'requestId': uuid.uuid4().hex, 'allowNativeOpus': False})
+        self.assertNotEqual(first['id'], second['id'])
+        self.assertEqual(self.jobs.creates, 2)
+
+    def test_removed_quality_option_fails_before_preparation(self):
+        with self.assertRaises(LibraryError):
+            self.service.listen(self.song['id'], {'requestId': uuid.uuid4().hex, 'storageProfile': 'compact128'})
+        self.assertEqual(self.jobs.creates, 0)
+
+    def test_malformed_browser_capability_fails_before_preparation(self):
+        with self.assertRaises(LibraryError):
+            self.service.listen(self.song['id'], {'requestId': uuid.uuid4().hex, 'allowNativeOpus': 'false'})
+        self.assertEqual(self.jobs.creates, 0)
+
     def test_refresh_is_metadata_only_and_singleflight(self):
         seed = self.listen()
         self.event(seed, 'up')
@@ -168,6 +196,24 @@ class RecommendationTests(unittest.TestCase):
 
     def test_two_times_rate_can_finish_in_half_wall_time(self):
         session = self.listen()
+        self.now += 2
+        session = self.event(session, 'complete', position=4, listenedSeconds=4, playbackRate=2)
+        self.assertEqual(session['completedListens'], 1)
+
+    def test_half_speed_finishes_after_twice_the_wall_time_and_counts_once(self):
+        session = self.listen()
+        self.now += 8
+        session = self.event(session, 'complete', position=4, listenedSeconds=4, playbackRate=.5)
+        self.assertEqual(session['completedListens'], 1)
+        session = self.event(session, 'complete', position=4, listenedSeconds=4, playbackRate=.5)
+        self.assertEqual(session['completedListens'], 1)
+
+    def test_mixed_slow_fast_and_slow_progress_credits_only_heard_media_seconds(self):
+        session = self.listen()
+        self.now += 2
+        self.event(session, 'progress', position=1, listenedSeconds=1, playbackRate=.5)
+        self.now += 1
+        self.event(session, 'progress', position=3, listenedSeconds=3, playbackRate=2)
         self.now += 2
         session = self.event(session, 'complete', position=4, listenedSeconds=4, playbackRate=2)
         self.assertEqual(session['completedListens'], 1)

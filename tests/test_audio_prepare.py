@@ -91,12 +91,14 @@ class AudioPreparationTests(unittest.TestCase):
         self.assertEqual(Path(result["file"]).suffix, ".wav")
         self.assertEqual(Path(result["file"]).read_bytes(), self.source.read_bytes())
 
-    def test_webm_whole_recording_is_converted_for_preview(self):
+    def test_webm_whole_recording_is_preserved_for_preview(self):
         staged = self.root / "download.webm"
         subprocess.run([executable("ffmpeg"), "-v", "error", "-i", str(self.source),
                         "-c:a", "libopus", str(staged)], check=True)
         result = prepare_audio(staged, self.output, {})
-        self.assertEqual(Path(result["file"]).suffix, ".m4a")
+        self.assertEqual(Path(result["file"]).suffix, ".webm")
+        self.assertEqual(Path(result["file"]).read_bytes(), staged.read_bytes())
+        self.assertEqual(result["storage"]["transformation"], "preserved")
         self.assertAlmostEqual(probe(result["file"])[0], 8, delta=.05)
         self.assertGreater(len(decode(result["file"])), 7.9*SAMPLE_RATE*2)
 

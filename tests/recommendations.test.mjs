@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { ListenTracker, RecommendationPlayer, RecommendationPanel, connectRecommendationPlayback } from '../public/recommendations.js';
 
 import { MusicPlayer } from '../public/player.js';
+import { MEDIA_EFFECTS_UNSUPPORTED, NATIVE_MEDIA_REVERB_MESSAGE } from '../public/audio-effects.js';
 
 class Audio extends EventTarget {
-  constructor() { super(); this.currentTime = 0; this.duration = 100; this.playbackRate = 1; this.paused = true; this.src = ''; this.playCalls = 0; }
+  constructor() { super(); this.currentTime = 0; this.duration = 100; this.playbackRate = 1; this.defaultPlaybackRate = 1; this.preservesPitch = true; this.webkitPreservesPitch = true; this.mozPreservesPitch = true; this.paused = true; this.src = ''; this.playCalls = 0; }
   async play() { this.paused = false; this.playCalls++; this.dispatchEvent(new Event('play')); this.dispatchEvent(new Event('playing')); }
   pause() { if (!this.paused) { this.paused = true; this.dispatchEvent(new Event('pause')); } }
   removeAttribute(name) { if (name === 'src') this.src = ''; }
@@ -14,8 +15,9 @@ class Audio extends EventTarget {
   event(type) { this.dispatchEvent(new Event(type)); }
 }
 const tick = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+const timeRanges = ranges => ({ length: ranges.length, start: index => ranges[index][0], end: index => ranges[index][1] });
 const deferred = () => { let resolve, reject; const promise = new Promise((a,b) => { resolve=a; reject=b; }); return {promise, resolve, reject}; };
-function fixture(handler = null) {
+function fixture(handler = null, options = {}) {
   let now = 0, sequence = 0, nextTimer = 0;
   const requests = [], timers = new Map(), stored = new Map(), audio = new Audio();
   const session = { id: 'session-1', candidateId: 'candidate-1', status: 'ready', completedListens: 0, track: { audioUrl: '/temporary/one.wav', title: 'One', duration: 100 } };
@@ -28,9 +30,24 @@ function fixture(handler = null) {
     if (body?.type === 'down') return { session: {...session, status: 'rejected'} };
     return {session: {...session}};
   }};
-  const player = new RecommendationPlayer(deps);
+  const player = new RecommendationPlayer({...deps, ...options});
   return {player, audio, requests, session, timers, stored, now: value => { now=value; }, advance(seconds, rate=1) { now += seconds * 1000; audio.currentTime += seconds * rate; audio.event('timeupdate'); }};
 }
+
+test('recommendation acquisition snapshots native WebM Opus support for each new listen', async () => {
+  const f = fixture();
+  let capability = '';
+  f.audio.canPlayType = type => { assert.equal(type, 'audio/webm; codecs="opus"'); return capability; };
+  await f.player.listen('candidate-1');
+  const first = f.requests.find(request => request.path.endsWith('/listen')).body;
+  assert.equal(first.allowNativeOpus, false);
+  capability = 'probably';
+  await f.player.listen('candidate-1');
+  const requests = f.requests.filter(request => request.path.endsWith('/listen'));
+  assert.equal(requests[1].body.allowNativeOpus, true);
+  assert.notEqual(requests[1].body.requestId, first.requestId);
+  assert.equal(first.allowNativeOpus, false, 'the previous request snapshot remains unchanged');
+});
 
 test('listen tracker credits playback, not pause/buffering time, and respects rate', () => {
   let time=0; const t = new ListenTracker(() => time);
@@ -46,6 +63,55 @@ test('completion requires 95 percent and is invalidated by seeks or unexplained 
   time=95000; t.sample(95); assert.equal(t.completed(100),true);
   t.seek(99); assert.equal(t.completed(100),false);
   t.reset(); t.setPlaying(true,0); time+=1000; t.sample(99); assert.equal(t.seconds,1); assert.equal(t.seeked,true);
+});
+
+test('native played coverage preserves media seconds across the captured mixed-rate browser trace', () => {
+  let now=0, covered=0;
+  const tracker=new ListenTracker(()=>now,()=>timeRanges(covered ? [[0,covered]] : []));
+  const fallback=new ListenTracker(()=>now);
+  tracker.reset(.5); fallback.reset(.5);
+  // Chrome's media clock sometimes advances more than elapsed JS time at a
+  // rate change. Capping every delta loses over 5% of this actual 2s listen.
+  const trace=[['playing',8.4,0,.5],['timeupdate',266.8,.043493,.5],['ratechange',360.6,.097409,2],['timeupdate',532.9,.18599,2],['ratechange',712.2,.488478,1.5],['timeupdate',797.7,.652148,1.5],['timeupdate',1071.2,1.123766,1.5],['timeupdate',1329.6,1.51137,1.5],['timeupdate',1596.7,1.911982,1.5],['timeupdate',1678.9,2,1.5],['pause',1679,2,1.5]];
+  for (const [event,at,position,rate] of trace) {
+    now=at; covered=position;
+    for (const t of [tracker,fallback]) {
+      if (event==='timeupdate') t.sample(position);
+      else t.setPlaying(event!=='pause',position,rate);
+    }
+  }
+  assert.ok(fallback.seconds<1.9,'captured timing reproduces the old undercount');
+  assert.equal(tracker.seconds,2); assert.equal(tracker.completed(2),true); assert.equal(tracker.seeked,false);
+  assert.equal(tracker.snapshot(2).playbackRate,2);
+});
+
+test('native played coverage recovers a late pause position without adding paused or buffering time', () => {
+  let now=0, covered=0;
+  const t=new ListenTracker(()=>now,()=>timeRanges(covered ? [[0,covered]] : [])); t.reset(2);
+  now=6.8; t.setPlaying(true,0,2);
+  now=209.5; covered=.04781; t.setPlaying(false,covered);
+  const paused=t.seconds;
+  now=860.8; t.sample(covered); assert.equal(t.seconds,paused);
+  // The resumed native media clock exposes audio already confirmed as played.
+  now=860.9; covered=.455021; t.setPlaying(true,covered,2); assert.equal(t.seconds,covered);
+  for (const [at,position] of [[1115.9,.569319],[1386.6,1.112881],[1647.8,1.643713],[1806.3,2]]) { now=at; covered=position; t.sample(position); }
+  assert.equal(t.seconds,2); assert.equal(t.completed(2),true); assert.equal(t.seeked,false);
+  t.setPlaying(false,2); now+=600000; t.sample(2); assert.equal(t.seconds,2);
+  t.reset(.5); covered=0; t.setPlaying(true,0,.5);
+  now+=1000; covered=.25; t.setPlaying(false,.25); // waiting
+  now+=600000; t.sample(.25); assert.equal(t.seconds,.25); assert.equal(t.completed(2),false);
+});
+
+test('native played ranges do not bypass seek invalidation or the 95 percent completion requirement', async () => {
+  const f=fixture(); let ranges=[]; Object.defineProperty(f.audio,'played',{get:()=>timeRanges(ranges)});
+  await f.player.listen('candidate-1'); f.now(94000); f.audio.currentTime=94; ranges=[[0,94]]; f.audio.event('timeupdate');
+  assert.equal(f.player.tracker.completed(100),false);
+  assert.equal(f.requests.filter(request=>request.body?.type==='complete').length,0);
+  // Even confirmed coverage above 95% cannot turn an explicit seek into a listen.
+  f.audio.currentTime=100; ranges=[[0,100]]; f.audio.event('seeking'); f.audio.event('ended'); await tick();
+  assert.equal(f.requests.at(-1).body.type,'skip'); assert.equal(f.requests.at(-1).body.seeked,true);
+  ranges=[]; await f.player.listen('candidate-1');
+  assert.equal(f.player.tracker.seconds,0); assert.equal(f.player.tracker.seeked,false);
 });
 
 test('acquisition happens only on Listen, and repeated clicks create one request', async () => {
@@ -74,6 +140,49 @@ test('playing at double speed sends media seconds with playbackRate', async () =
   const f=fixture(); await f.player.listen('candidate-1'); f.audio.playbackRate=2; f.audio.event('ratechange');
   f.advance(50,2); f.audio.event('ended'); await tick();
   assert.equal(f.requests.at(-1).body.type,'complete'); assert.equal(f.requests.at(-1).body.listenedSeconds,100); assert.equal(f.requests.at(-1).body.playbackRate,2);
+});
+
+test('half-speed recommendation listening counts a natural full listen with the chosen pitch mode', async () => {
+  const f=fixture(); f.player.setPlaybackRate(.5); f.player.setPitchChanges(false);
+  await f.player.listen('candidate-1');
+  assert.equal(f.audio.playbackRate,.5); assert.equal(f.audio.defaultPlaybackRate,.5);
+  assert.equal(f.audio.preservesPitch,true); assert.equal(f.audio.webkitPreservesPitch,true); assert.equal(f.audio.mozPreservesPitch,true);
+  for(let i=0;i<40;i++) f.advance(5,.5);
+  assert.equal(f.requests.filter(r=>r.body?.type==='complete').length,0);
+  f.audio.event('ended'); await tick();
+  const event=f.requests.at(-1).body;
+  assert.equal(event.type,'complete'); assert.equal(event.listenedSeconds,100); assert.equal(event.playbackRate,.5); assert.equal(event.peakRate,.5); assert.equal(event.seeked,false);
+});
+
+test('rate and pitch changes sample the old rate without seeking, restarting, or finishing playback', async () => {
+  const f=fixture(); let beforePlay=0; f.player.beforePlay=()=>beforePlay++;
+  await f.player.listen('candidate-1');
+  const requests=f.requests.length, generation=f.player.generation, intent=f.player.playIntent, playCalls=f.audio.playCalls, before=beforePlay;
+  f.now(20000); f.audio.currentTime=20; f.player.setPlaybackRate(2);
+  assert.equal(f.player.tracker.seconds,20);
+  f.now(35000); f.audio.currentTime=50; f.player.setPlaybackRate(.5);
+  assert.equal(f.player.tracker.seconds,50);
+  f.now(55000); f.audio.currentTime=60; f.player.setPitchChanges(false);
+  assert.equal(f.player.tracker.seconds,60); assert.equal(f.audio.preservesPitch,true);
+  f.player.setPitchChanges(true); assert.equal(f.audio.preservesPitch,false);
+  assert.equal(f.audio.currentTime,60); assert.equal(f.audio.src,'/temporary/one.wav'); assert.equal(f.audio.paused,false);
+  assert.equal(f.audio.playCalls,playCalls); assert.equal(beforePlay,before); assert.equal(f.requests.length,requests);
+  assert.equal(f.player.generation,generation); assert.equal(f.player.playIntent,intent); assert.equal(f.player.tracker.seeked,false);
+  f.now(135000); f.audio.currentTime=100; f.audio.event('ended'); await tick();
+  assert.equal(f.requests.at(-1).body.type,'complete'); assert.equal(f.requests.at(-1).body.listenedSeconds,100); assert.equal(f.requests.at(-1).body.playbackRate,2); assert.equal(f.requests.at(-1).body.seeked,false);
+});
+
+test('recommendation settings are bounded and survive metadata and kept audio source changes', async () => {
+  const f=fixture();
+  assert.equal(f.player.pitchChanges,true); assert.equal(f.audio.preservesPitch,false);
+  f.player.setPlaybackRate(10); assert.equal(f.audio.playbackRate,2);
+  f.player.setPlaybackRate(-1); assert.equal(f.audio.playbackRate,.5);
+  f.player.setPlaybackRate(NaN); assert.equal(f.audio.playbackRate,1);
+  f.player.setPlaybackRate(.75); f.player.setPitchChanges(false); await f.player.listen('candidate-1');
+  f.advance(20,.75); f.audio.playbackRate=1; f.audio.preservesPitch=false; f.audio.event('loadedmetadata');
+  assert.equal(f.audio.playbackRate,.75); assert.equal(f.audio.preservesPitch,true);
+  await f.player.finish('up');
+  assert.equal(f.audio.src,'/audio/kept.wav'); assert.equal(f.audio.playbackRate,.75); assert.equal(f.audio.defaultPlaybackRate,.75); assert.equal(f.audio.currentTime,15); assert.equal(f.audio.paused,false);
 });
 
 test('thumbs-up retains the track, updates its URL, and resumes at the same position', async () => {
@@ -141,7 +250,8 @@ test('pausing a still-loading main loop does not cancel the chosen recommendatio
     main.setCatalog([{id:'loop',kind:'loop',audioUrl:'/loop.wav',duration:100}]);
     const loading=main.playTrack('loop',['loop']); await tick(); assert.equal(main.loading,true);
     await f.player.listen('candidate-1'); assert.equal(f.audio.paused,false); assert.equal(f.player.session.status,'ready'); assert.equal(main.autoplayRequested,false);
-    main.setVolume(.3); assert.equal(f.player.session.status,'ready');
+    main.setVolume(.3); main.setPlaybackRate(.5); main.setPitchChanges(false);
+    assert.equal(f.player.session.status,'ready'); assert.equal(f.audio.paused,false);
     pending.resolve({ok:false}); await loading; assert.equal(f.audio.paused,false);
     main.setCatalog([{id:'original',kind:'original',audioUrl:'/owned.wav',duration:100}]);
     await main.playTrack('original',['original']); await tick(); assert.equal(f.audio.paused,true); assert.equal(f.player.session.status,'limbo');
@@ -157,13 +267,26 @@ test('lowering playback speed and losing a progress report cannot invalidate act
 });
 
 
-function panelFixture(api) {
+function panelFixture(api, settings = {}) {
   const nodes=new Map(), audio=new Audio(), timers=new Map(); let timer=0;
   const node=selector=>{if(!nodes.has(selector))nodes.set(selector,{value:'',textContent:'',innerHTML:'',disabled:false,hidden:false});return nodes.get(selector)};
-  const root={addEventListener(){},querySelector:selector=>selector==='audio'?audio:node(selector),querySelectorAll:()=>[]};
-  const panel=new RecommendationPanel({root,api,pauseMain(){},getVolume:()=>.4,refreshLibrary(){},schedule:fn=>{timers.set(++timer,fn);return timer},cancel:id=>timers.delete(id)});
-  return {panel,node,timers};
+  const listeners=new Map(), root={addEventListener(name,handler){listeners.set(name,handler)},querySelector:selector=>selector==='audio'?audio:node(selector),querySelectorAll:()=>[]};
+  const speedControlFactory=options=>({options,setPlaybackSettings({playbackRate,pitchChanges}){node('#recommendation-speed').value=String(playbackRate);node('#recommendation-pitch-changes').checked=pitchChanges;},destroy(){}});
+  const panel=new RecommendationPanel({root,api,pauseMain(){},getVolume:()=>.4,refreshLibrary(){},speedControlFactory,schedule:fn=>{timers.set(++timer,fn);return timer},cancel:id=>timers.delete(id),...settings});
+  return {panel,node,timers,listeners};
 }
+
+test('recommendation controls reflect shared settings and route changes to the global player', () => {
+  const changes=[], f=panelFixture(async()=>({}),{playbackRate:.75,pitchChanges:false,onPlaybackRateChange:value=>changes.push(['rate',value]),onPitchChangesChange:value=>changes.push(['pitch',value])});
+  f.panel.renderPlayer();
+  assert.equal(f.node('#recommendation-speed').value,'0.75'); assert.equal(f.node('#recommendation-pitch-changes').checked,false);
+  f.panel.speedControl.options.onPlaybackRateChange(1.5);
+  f.panel.speedControl.options.onPitchChangesChange(true);
+  assert.deepEqual(changes,[['rate',1.5],['pitch',true]]);
+  f.panel.setPlaybackSettings({playbackRate:1.5,pitchChanges:true});
+  assert.equal(f.node('#recommendation-speed').value,'1.5'); assert.equal(f.node('#recommendation-pitch-changes').checked,true);
+  assert.equal(f.panel.player.audio.playbackRate,1.5); assert.equal(f.panel.player.audio.preservesPitch,false);
+});
 
 test('library deletion stops retained recommendation audio and refreshes metadata without feedback', async () => {
   const requests=[], retained={id:'saved-session',candidateId:'candidate-1',status:'retained',track:{id:'saved-track',audioUrl:'/audio/saved.wav',title:'Saved'},candidate:{id:'candidate-1',rating:'up'}};
@@ -280,4 +403,89 @@ test('choosing Listen pauses other playback before acquisition can race main-tra
   f.player.beforePlay=()=>{mainPaused=true}; const loading=f.player.listen('candidate-1');
   assert.equal(mainPaused,true); assert.equal(f.audio.playCalls,0);
   d.resolve({session:f.session}); await loading; assert.equal(f.audio.playCalls,1);
+});
+
+test('recommendation route prepares initial and retained playback without restarting for effect changes', async () => {
+  const calls=[], route={setReverb:async value=>{calls.push(['reverb',value]);return true;},setVolume:value=>calls.push(['volume',value]),prepare:async()=>{calls.push(['prepare']);},destroy:()=>calls.push(['destroy'])};
+  const f=fixture(null,{audioRoute:route});
+  await f.player.listen('candidate-1');
+  assert.equal(calls.filter(([name])=>name==='prepare').length,1);
+  const playCalls=f.audio.playCalls, position=f.audio.currentTime;
+  f.player.setVolume(.3); await f.player.setReverb(.65);
+  assert.equal(f.audio.playCalls,playCalls); assert.equal(f.audio.currentTime,position);
+  assert.equal(f.player.reverb,.65); assert.equal(f.player.effectsError,'');
+  assert.deepEqual(calls.filter(([name])=>name==='volume'),[['volume',.3]]);
+  await f.player.finish('up');
+  assert.equal(calls.filter(([name])=>name==='prepare').length,2);
+  assert.equal(f.audio.paused,false); assert.equal(f.player.reverb,.65);
+  f.player.destroy(); assert.deepEqual(calls.at(-1),['destroy']);
+});
+
+test('a captured recommendation route can recover on Play after a suspended-context failure', async () => {
+  let attempts=0;
+  const f=fixture(null,{audioRoute:{setReverb:async()=>true,setVolume(){},prepare:async()=>{if(++attempts===1)throw new Error('context suspended');},destroy(){}}});
+  await f.player.listen('candidate-1');
+  assert.equal(f.audio.paused,true); assert.match(f.player.error,/Press Play/);
+  await f.player.resume();
+  assert.equal(f.audio.paused,false); assert.equal(attempts,2); assert.equal(f.player.error,'');
+  assert.equal(f.requests.filter(request=>request.path.endsWith('/listen')).length,1);
+  assert.equal(f.requests.filter(request=>request.body?.type==='complete').length,0);
+});
+
+test('interrupting a recommendation while its audio route prepares cannot start or credit it later', async () => {
+  const d=deferred();
+  const f=fixture(null,{audioRoute:{setReverb:async()=>true,setVolume(){},prepare:()=>d.promise,destroy(){}}});
+  const listening=f.player.listen('candidate-1');await tick();
+  assert.equal(f.player.session.status,'ready'); assert.equal(f.player.busy,true);
+  f.player.interrupt();d.resolve();await listening;await tick();
+  assert.equal(f.audio.playCalls,0); assert.equal(f.audio.paused,true);
+  assert.equal(f.requests.filter(request=>request.body?.type==='skip').length,1);
+  assert.equal(f.requests.filter(request=>request.body?.type==='complete').length,0);
+});
+
+test('effect changes leave recommendation natural-listen counting and seek exclusion intact', async () => {
+  const route={setReverb:async()=>true,setVolume(){},prepare:async()=>{},destroy(){}},f=fixture(null,{audioRoute:route});
+  await f.player.listen('candidate-1');f.advance(50);await f.player.setReverb(1);
+  f.player.setPitchChanges(false);f.advance(50);f.audio.event('ended');f.audio.event('ended');await tick();
+  assert.equal(f.requests.filter(request=>request.body?.type==='complete').length,1);
+  await f.player.listen('candidate-1');await f.player.setReverb(0);f.audio.currentTime=99;f.audio.event('seeking');f.audio.event('ended');await tick();
+  assert.equal(f.requests.filter(request=>request.body?.type==='complete').length,1);
+  assert.equal(f.requests.at(-1).body.type,'skip');
+});
+
+test('a stale effect failure cannot override a newer disabled-effect choice', async () => {
+  const d=deferred();let calls=0;
+  const f=fixture(null,{audioRoute:{setReverb:()=>++calls===2?d.promise:Promise.resolve(true),setVolume(){},prepare:async()=>{},destroy(){}}});
+  const old=f.player.setReverb(.8);await f.player.setReverb(0);d.resolve(false);await old;
+  assert.equal(f.player.reverb,0);assert.equal(f.player.effectsError,'');
+});
+
+test('unsupported recommendation reverb keeps native listening, retry and completion counting intact', async () => {
+  const error={code:MEDIA_EFFECTS_UNSUPPORTED},route={error,setReverb:async value=>value===0,prepare:async()=>false,setVolume(){},destroy(){}};
+  const f=fixture(null,{audioRoute:route,reverb:1,playbackRate:1.37,pitchChanges:false});
+  await f.player.listen('candidate-1');
+  assert.equal(f.player.effectsError,NATIVE_MEDIA_REVERB_MESSAGE);
+  assert.equal(f.player.error,'');assert.equal(f.audio.paused,false);
+  assert.equal(f.audio.playbackRate,1.37);assert.equal(f.audio.preservesPitch,true);
+  f.audio.pause();await f.player.resume();
+  assert.equal(f.audio.paused,false);assert.equal(f.player.effectsError,NATIVE_MEDIA_REVERB_MESSAGE);
+  assert.equal(f.requests.filter(request=>request.path.endsWith('/listen')).length,1);
+  await f.player.setReverb(.5);
+  assert.equal(f.player.effectsError,NATIVE_MEDIA_REVERB_MESSAGE);
+  f.advance(100/1.37,1.37);f.audio.event('ended');f.audio.event('ended');await tick();
+  assert.equal(f.requests.filter(request=>request.body?.type==='complete').length,1);
+  await f.player.setReverb(0);assert.equal(f.player.effectsError,'');
+  f.player.destroy();
+});
+
+test('recommendation panel retains the specific native-reverb compatibility notice', () => {
+  let reportEffect;
+  const f=panelFixture(async()=>({}),{reverb:1,createMediaRoute:(audio,onError)=>{
+    reportEffect=onError;
+    return {setReverb:async()=>true,prepare:async()=>false,setVolume(){},destroy(){}};
+  }});
+  reportEffect({code:MEDIA_EFFECTS_UNSUPPORTED});
+  assert.equal(f.panel.player.effectsError,NATIVE_MEDIA_REVERB_MESSAGE);
+  assert.equal(f.node('#recommendation-now-status').textContent,NATIVE_MEDIA_REVERB_MESSAGE);
+  f.panel.player.destroy();
 });

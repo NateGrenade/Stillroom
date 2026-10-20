@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING = ROOT / 'packaging'
-VERSION = '1.5.2'
+VERSION = '1.6.0'
 
 MAC_LAUNCH = '''#!/bin/sh
 # The folder stays portable; all dependencies are included beside the app.
@@ -124,6 +124,19 @@ The downloaded file stays on your computer until you send it. A recipient can
 play it or add it through Add music, Audio files. Loop repeat settings and playlist
 membership are not transferred. Exports are limited to six hours and 512 MB;
 one export is prepared at a time, and long encodes may time out.
+
+PLAYBACK AND RECOMMENDATIONS
+Click the current speed readout for a continuous 0.5x to 2x slider. Pointer
+movement gently snaps near common speeds; arrow keys allow precise adjustments.
+Pitch follows speed starts on. Turn it off inside the speed control to preserve
+pitch. Speed and pitch preferences also apply to recommendation listening.
+Advanced options (the three-dot button on the song bar) contains Added reverb,
+which starts off. Desktop Chrome and Firefox support reverb on songs, loops and
+recommendations. Safari/WebKit keeps songs and recommendations on native dry
+playback with a compatibility notice; prepared loops still support reverb.
+Time stretching and reverb can change the texture of music, especially at extremes.
+Show/Hide recommendations collapses the section without stopping its audio.
+These interface choices are remembered in the same browser and local address.
 
 ADDING AUDIO
 Choose Audio files or YouTube link. Auto fills available track information;

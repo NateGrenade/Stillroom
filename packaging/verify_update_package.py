@@ -26,6 +26,21 @@ sys.path.insert(0, str(SOURCE_ROOT))
 from app.updates import Updates, extract_package, package_python, safe_relative, digest
 
 
+
+def track_metadata_preserved(before, after):
+    """Preserve all old fields; 1.6 may only add its unknown-storage marker."""
+    if len(before) != len(after):
+        return False
+    for old_track, new_track in zip(before, after):
+        expected = dict(old_track)
+        if "storage" not in old_track and "storage" in new_track and new_track["storage"] is None:
+            expected["storage"] = None
+        # JSON boolean/number types must not collapse through Python equality.
+        if json.dumps(new_track, sort_keys=True, separators=(",", ":")) != json.dumps(expected, sort_keys=True, separators=(",", ":")):
+            return False
+    return True
+
+
 def call(port, path, method="GET", data=None, headers=None, timeout=30):
     if isinstance(data, dict):
         data = json.dumps(data).encode()
@@ -193,7 +208,7 @@ def verify(old_archive, new_archive, online=False, local_upload=False):
             check(health["pid"] != original_health["pid"], "old server is stopped and a new process is running")
             check(health["root"] == str(old), "library stays in the exact original folder")
             after = call(port, "/api/library")
-            check(after["tracks"] == before["tracks"], "saved track IDs and all track metadata survive exactly")
+            check(track_metadata_preserved(before["tracks"], after["tracks"]), "saved track IDs and all existing metadata survive; only added storage:null is allowed")
             check(after["playlists"] == before["playlists"], "playlist IDs, names, track order, and membership survive exactly")
             check({p.name: digest(p) for p in (old / "audio").iterdir() if p.is_file()} == audio_hashes, "all audio files remain byte-for-byte identical")
             for relative, body in marker_files.items():

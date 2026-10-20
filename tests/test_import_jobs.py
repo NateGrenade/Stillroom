@@ -161,6 +161,50 @@ class ImportJobTests(unittest.TestCase):
         self.assertFalse((self.server.import_jobs.session / job["id"]).exists())
         self.assertEqual(self.server.library.library()["tracks"], [])
 
+    def test_preview_commit_preserves_reviewed_source_bytes_and_provenance(self):
+        identifier = self.upload()
+        job = self.ready(identifier)
+        self.assertNotIn("profile", job["storage"])
+        self.assertEqual(job["storage"]["source"]["codec"], "pcm_s16le")
+        self.assertEqual(job["storage"]["stored"]["codec"], "pcm_s16le")
+        status, preview = self.request("GET", job["audioUrl"])
+        self.assertEqual(status, 200)
+        self.assertEqual(preview, self.source.read_bytes())
+        with self.assertRaises(LibraryError):
+            self.server.import_jobs.commit(identifier, {"storageProfile": "compact192"})
+        self.assertEqual(self.server.import_jobs.get(identifier)["status"], "ready")
+        result = self.server.import_jobs.commit(identifier, {})
+        track = result["track"]
+        self.assertEqual(track["storage"], job["storage"])
+        self.assertEqual((self.server.library.root / track["audioUrl"].lstrip('/')).read_bytes(), preview)
+        self.assertFalse((self.server.import_jobs.session / identifier).exists())
+
+    def test_direct_batch_upload_preserves_compatible_source(self):
+        options = {"metadataMode": "auto"}
+        status, raw = self.request("POST", "/api/import", self.source.read_bytes(), {
+            "Content-Type": "audio/wav", "X-Filename": self.source.name,
+            "X-Track-Metadata": base64.b64encode(json.dumps(options).encode()).decode(),
+        })
+        self.assertEqual(status, 201, raw)
+        storage = json.loads(raw)["track"]["storage"]
+        self.assertNotIn("profile", storage)
+        self.assertEqual(storage["transformation"], "preserved")
+        self.assertEqual(storage["source"], storage["stored"])
+
+    def test_removed_quality_options_are_rejected_by_both_upload_apis(self):
+        for path in ("/api/import", "/api/import-jobs/file"):
+            for profile in ("source", "compact128", None):
+                with self.subTest(path=path, profile=profile), patch("app.library.probe") as probe:
+                    status, raw = self.request("POST", path, self.source.read_bytes(), {
+                        "Content-Type": "audio/wav", "X-Filename": self.source.name,
+                        "X-Track-Metadata": base64.b64encode(json.dumps({"storageProfile": profile}).encode()).decode(),
+                    })
+                    self.assertEqual(status, 400, raw)
+                    self.assertIn("no longer supported", json.loads(raw)["error"])
+                    probe.assert_not_called()
+        self.assertEqual(self.server.library.library()["tracks"], [])
+        self.assertEqual(self.server.import_jobs.jobs, {})
+
 
 if __name__ == "__main__":
     unittest.main()

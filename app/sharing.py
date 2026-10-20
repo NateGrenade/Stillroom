@@ -31,7 +31,8 @@ MAX_EXPORT_SECONDS = 6 * 60 * 60
 PROBE_TIMEOUT = 30
 ENCODE_TIMEOUT = 15 * 60
 SNAPSHOT_TIMEOUT = 30
-INPUT_FORMATS = {".mp3": "mp3", ".m4a": "mov", ".aac": "aac", ".wav": "wav", ".flac": "flac"}
+INPUT_FORMATS = {".mp3": "mp3", ".m4a": "mov", ".aac": "aac", ".wav": "wav", ".flac": "flac",
+                 ".opus": "ogg", ".ogg": "ogg", ".webm": "matroska"}
 GENERIC_FILENAME = "stillroom-audio.m4a"
 _TRACK_ID = re.compile(r"[0-9a-f]{32}\Z")
 _REVISION = re.compile(r"[0-9a-f]{64}\Z")
@@ -141,7 +142,7 @@ class Sharing:
         if row is None:
             raise LibraryError("Song not found. It may already have been deleted.", 404)
         filename = row["audio_filename"]
-        if not isinstance(filename, str) or not re.fullmatch(re.escape(track_id) + r"\.(?:mp3|m4a|aac|wav|flac)", filename):
+        if not isinstance(filename, str) or not re.fullmatch(re.escape(track_id) + r"\.(?:mp3|m4a|aac|wav|flac|opus|ogg|webm)", filename):
             raise LibraryError("This song's library audio is unavailable.", 409)
         _selection(row)
         return dict(row)

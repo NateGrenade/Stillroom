@@ -1,6 +1,6 @@
 # Stillroom
 
-A private music library served on `127.0.0.1:8768`, with disk-backed songs and playlists. No runtime package install or internet access is required for playback. The source checkout requires Python 3.10+, FFmpeg/ffprobe for imports, and a modern browser. Portable Mac and Windows releases include their own runtimes; see [packaging instructions](../packaging/README.md).
+A private music library served on `127.0.0.1:8768`, with disk-backed songs and playlists. No runtime package install or internet access is required for playback. The source checkout requires Python 3.10+, FFmpeg/ffprobe for imports, and a modern browser. Portable Mac and Windows releases include their own runtimes; see `packaging/README.md`.
 
 ## Run
 
@@ -13,7 +13,17 @@ The executable `Start Music.command` opens the app for normal use. The service r
 
 ## Library and playback
 
-`app/library.py` owns SQLite transactions and media imports. Use `scripts/import_track.py`, never direct database edits, to add tracks. Originals use streamed browser audio. Prepared loops are decoded, trimmed to their stored `loopStart`/`loopEnd`, and repeated by a single Web Audio source. Repeat-off plays through the active queue once; repeat-all wraps it; repeat-one repeats the selected track. Shuffle traverses each selected queue entry before repeating.
+`app/library.py` owns SQLite transactions and media imports. Use `scripts/import_track.py`, never direct database edits, to add tracks. Originals use streamed browser audio. Prepared loops are decoded and trimmed to their stored `loopStart`/`loopEnd`. At 1×, or with **Pitch follows speed** on, they repeat through a single Web Audio source with sample-accurate boundaries. Keeping pitch at another speed uses a local AudioWorklet that stretches overlapping, waveform-aligned grains continuously through the repeat boundary. Neither mode rewrites saved audio or creates a disk cache. Time stretching can change the texture of music, especially at extreme speeds. Repeat-off plays through the active queue once; repeat-all wraps it; repeat-one repeats the selected track. Shuffle traverses each selected queue entry before repeating.
+
+The compact speed readout opens a continuous **0.5× to 2×** slider. Pointer movement gently snaps near common speeds, while intermediate values and keyboard arrow adjustments remain available. Release a pointer drag to finish, or use Enter, Escape, outside click or focus movement to close the control. Expansion respects reduced-motion preferences. **Pitch follows speed** starts on: slower playback lowers pitch and faster playback raises it. Turn it off inside the expanded control to keep the original pitch while changing speed. These preferences are saved in the browser and also apply to recommendation listening. Import preparation previews stay at their original speed so you can assess trims and loop boundaries.
+
+**Advanced options** at the right of the song bar contains the added-reverb slider. It defaults to zero/off and applies to ordinary songs, prepared loops and recommendation listening. The browser saves the chosen amount locally. Reverb uses a finite room response with smoothly blended dry/wet paths and conservative headroom; it does not rewrite or upload audio. Zero bypasses the effect. Pausing, seeking and changing songs clear old reverb history. A browser unable to initialize an optional effect reports the issue and retains dry playback where available.
+
+Desktop Chrome and Firefox support reverb on all three playback paths. Safari/WebKit keeps ordinary songs and recommendation listening on native, dry playback and displays a compatibility notice when reverb is requested; prepared loops still support reverb. The locally tested Safari 18.1.1 media capture ignored volume, mute and pitch-following controls. Its [reported rate/pitch bug](https://bugs.webkit.org/show_bug.cgi?id=240405) has an upstream fix, but newer Safari volume/mute routing has not been verified here, so the guard remains conservative for WebKit. This avoids taking away working native controls or decoding whole ordinary songs as a workaround. Native dry pitch/volume behavior is preserved; Safari fallback checks verify those properties and advancing playback without recapturing the signal.
+
+The recommendation section has a **Show/Hide recommendations** toggle. Its remembered choice affects the section's display without interrupting audio or changing recommendation history.
+
+A selected loop retains one full decoded PCM copy, either in the native Web Audio buffer or transferred to the pitch-preserving worklet. Pauses, seeks and resumes reuse that worklet. Decoding initially overlaps the full recording and selected region in memory; switching back to native playback can also briefly overlap copies. Browser allocation and garbage collection determine process memory after release. No decoded tracks are cached on disk or preloaded for adjacent songs.
 
 Audio metadata lives in `data/library.sqlite3`; copied audio lives in `audio/`. Static UI files are under `public/`. Browser storage holds interface preferences, resumable playlist review state, and update-check timing. Optional YouTube account settings and uploaded cookies are kept locally under `data/.youtube-auth/`. Source audio is not deleted. Duplicate imports are rejected unless explicitly allowed. The service validates loopback host/origin and serves only static UI and registered audio filenames.
 
@@ -31,9 +41,13 @@ python3 scripts/import_track.py --list
 
 The loop helper requires deliberately chosen musical boundaries. It crossfades the tail with the head and encodes circular guards; import the helper's emitted bounds. The built-in `/diagnostics.html?track=TRACK_ID` page checks browser decoding and a short rendered repeat boundary. Numerical validation does not replace listening to the musical seam.
 
+The discoverable `$music-library` skill is maintained in `skills/music-library`; `~/.codex/skills/music-library` links to it.
+
 ## Import from the app
 
 Open **Add music** and choose **Audio files**, **YouTube link**, **YouTube playlist**, or **Spotify playlist**. A single file or video is prepared as a temporary preview, then saved only when you click **Add to library**. Existing multiple-file uploads remain available. Playlists use the separate review and batch import flows below.
+
+Compatible compressed recordings keep their original bytes. Opus in Ogg or Matroska is copied into an audio-only WebM container without re-encoding; native WebM is retained unchanged. Browsers that do not report WebM Opus support receive an AAC compatibility copy instead. Other incompatible whole recordings also use an AAC compatibility copy. The preview shows the source and saved codecs, bitrates, sizes, and any conversion note; a bitrate marked approximately is estimated from the source file. Trims and prepared loops remain lossless FLAC to retain their verified sample boundaries. There is no quality-profile selector or optional compact re-encoding. Existing library songs are untouched. Playlist reviews keep their browser-capability choice for imports and retries.
 
 - **Auto** reads embedded tags or YouTube video details. You can edit the title, creator/artist, and album before saving. When YouTube supplies no artist, the channel is shown with an explanatory note. **Enter myself** uses your own details.
 - Expand **Trim or make a loop** to enter seconds, `m:ss`, or `h:mm:ss`, including fractions. Blank start/end mean the beginning/end. With both blank, the original whole recording is retained. Time offsets embedded in a YouTube link are ignored; use the timestamp fields.
@@ -43,7 +57,7 @@ Open **Add music** and choose **Audio files**, **YouTube link**, **YouTube playl
 
 YouTube acquisition uses yt-dlp, Node.js, and FFmpeg. Portable releases select their bundled tools first; the source checkout uses `.tools/audio/bin/yt-dlp` or installed tools. It accepts one video up to six hours and 512 MB. Imports are anonymous by default; optional YouTube account access is described below. Generated audio is limited to 512 MB, and preparation stops if temporary work exceeds 1.5 GB; use a shorter excerpt when needed. Restricted/unavailable videos show a useful error. Downloader updates may occasionally be needed as YouTube changes. [yt-dlp documentation](https://github.com/yt-dlp/yt-dlp#usage-and-options).
 
-The job API is `POST /api/import-jobs` for YouTube or `POST /api/import-jobs/file` for raw audio uploads, then `GET /api/import-jobs/ID`, `GET /api/import-jobs/ID/audio`, and `POST /api/import-jobs/ID/commit`. `DELETE /api/import-jobs/ID` cancels/discards the preview. Commit retries return the same saved track during the session.
+The job API is `POST /api/import-jobs` for YouTube or `POST /api/import-jobs/file` for raw audio uploads, then `GET /api/import-jobs/ID`, `GET /api/import-jobs/ID/audio`, and `POST /api/import-jobs/ID/commit`. Preparation accepts boolean `allowNativeOpus`; browser clients report native WebM Opus capability. Legacy quality-profile requests are rejected before acquisition; refresh an older open app page before importing. `DELETE /api/import-jobs/ID` cancels/discards the preview. Commit retries return the same saved track during the session, without re-encoding it. New tracks retain source and saved storage provenance separately; historical tracks have no invented provenance. Existing provenance and schema fields are preserved without rewriting saved audio.
 
 ## Share a song
 
@@ -117,4 +131,4 @@ python3 -m unittest discover -s tests -p 'test_*.py'
 node --test tests/*.test.mjs
 ```
 
-Tests use isolated temporary libraries and synthetic media. Live import checks must also use a disposable library.
+Tests use isolated temporary libraries. `tests/skill-evaluation-result.json` records an independent skill exercise. Live playlist checks must use a disposable library; the supplied Casual Christmas playlist is test input only and must not be imported into the source collection. The public interface can be checked in the browser without changing existing songs.

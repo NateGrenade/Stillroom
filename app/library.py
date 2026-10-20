@@ -18,7 +18,7 @@ import uuid
 from .runtime import find_executable, subprocess_options
 
 MAX_AUDIO_BYTES = 512 * 1024 * 1024
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 # Only self-contained media demuxers belong here. In particular, HLS, DASH,
 # concat and playlist formats can open resources named inside an uploaded file.
 LOCAL_AUDIO_FORMATS = (
@@ -120,7 +120,41 @@ def local_audio_input_options(path=None, *, for_probe=False):
     return options
 
 
-def probe(path):
+def _webm_doctype(path):
+    """Read the bounded EBML header; FFprobe names Matroska and WebM alike."""
+    try:
+        with Path(path).open("rb") as source:
+            header = source.read(4096)
+        def vint(offset, identifier=False):
+            first = header[offset]
+            width = next((width for width in range(1, 9) if first & (1 << (8-width))), None)
+            if width is None or offset+width > len(header) or (identifier and width > 4):
+                raise ValueError()
+            value = int.from_bytes(header[offset:offset+width], "big")
+            return (value if identifier else value & ((1 << (7*width))-1)), offset+width
+        if header[:4] != b"\x1a\x45\xdf\xa3":
+            return False
+        length, cursor = vint(4)
+        finish = cursor+length
+        if finish > len(header):
+            return False
+        doctype = None
+        while cursor < finish:
+            element, cursor = vint(cursor, True)
+            size, cursor = vint(cursor)
+            if cursor+size > finish:
+                return False
+            if element == 0x4282:
+                if doctype is not None:
+                    return False
+                doctype = header[cursor:cursor+size]
+            cursor += size
+        return cursor == finish and doctype == b"webm"
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def inspect_audio(path):
     try:
         source = Path(path).resolve()
         if not source.is_file():
@@ -129,7 +163,7 @@ def probe(path):
             raise LibraryError("Audio imports are limited to 512 MB.", 413)
         result = subprocess.run(
             [executable("ffprobe"), "-v", "error", *local_audio_input_options(for_probe=True),
-             "-show_entries", "format=format_name,duration:stream=codec_type,codec_name,duration",
+             "-show_entries", "format=format_name,duration,bit_rate:stream=codec_type,codec_name,duration,bit_rate",
              "-of", "json", str(source)],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=60, **subprocess_options(),
@@ -137,7 +171,9 @@ def probe(path):
         info = json.loads(result.stdout) if result.returncode == 0 else {}
     except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
         raise LibraryError("The audio file could not be inspected.")
-    streams = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
+    if not isinstance(info, dict) or not isinstance(info.get("streams"), list) or not isinstance(info.get("format", {}), dict):
+        raise LibraryError("The audio file could not be inspected.")
+    streams = [s for s in info["streams"] if isinstance(s, dict) and s.get("codec_type") == "audio"]
     if not streams:
         raise LibraryError("The file does not contain playable audio.")
     try:
@@ -147,7 +183,12 @@ def probe(path):
     if not math.isfinite(duration) or duration <= 0:
         raise LibraryError("The audio file has no valid duration.")
     codec = streams[0].get("codec_name", "")
-    formats = set(info.get("format", {}).get("format_name", "").split(","))
+    format_name = info.get("format", {}).get("format_name", "")
+    if not isinstance(codec, str) or not re.fullmatch(r"[a-zA-Z0-9_]{1,80}", codec) or not isinstance(format_name, str):
+        raise LibraryError("The audio file could not be inspected.")
+    formats = {value for value in format_name.split(",") if re.fullmatch(r"[a-zA-Z0-9_]{1,80}", value)}
+    if not formats:
+        raise LibraryError("The audio file could not be inspected.")
     extension = None
     if "mp3" in formats and codec == "mp3":
         extension = ".mp3"
@@ -159,7 +200,32 @@ def probe(path):
         extension = ".m4a"
     elif "aac" in formats and codec == "aac":
         extension = ".aac"
-    return duration, extension
+    elif "ogg" in formats and codec == "opus":
+        extension = ".opus"
+    elif "webm" in formats and codec == "opus" and _webm_doctype(source):
+        extension = ".webm"
+    # Opus is preserved only when the container is audio-only. Other containers
+    # can be remuxed by the storage policy without decoding the audio.
+    video = any(isinstance(s, dict) and s.get("codec_type") == "video" for s in info["streams"])
+    if codec == "opus" and video:
+        extension = None
+    try:
+        bitrate = int(streams[0].get("bit_rate") or 0)
+    except (ValueError, TypeError, OverflowError):
+        bitrate = 0
+    estimated = bitrate <= 0
+    size = source.stat().st_size
+    if estimated:
+        bitrate = round(size * 8 / duration)
+    return {"duration": duration, "extension": extension, "codec": codec,
+            "container": "webm" if "webm" in formats and _webm_doctype(source) else "matroska" if "matroska" in formats else "mp4" if "mov" in formats else sorted(formats)[0],
+            "bitrate": bitrate if 0 < bitrate <= 10**10 else None, "bitrateEstimated": estimated,
+            "bytes": size, "video": video}
+
+
+def probe(path):
+    info = inspect_audio(path)
+    return info["duration"], info["extension"]
 
 
 class Library:
@@ -198,6 +264,13 @@ class Library:
                     PRIMARY KEY(playlist_id, track_id), UNIQUE(playlist_id, position)
                 );
             """)
+            conn.execute("BEGIN IMMEDIATE")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)")}
+            if "source_sha256" not in columns:
+                conn.execute("ALTER TABLE tracks ADD COLUMN source_sha256 TEXT NOT NULL DEFAULT ''")
+            if "storage_json" not in columns:
+                conn.execute("ALTER TABLE tracks ADD COLUMN storage_json TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS tracks_source_hash ON tracks(source_sha256)")
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             conn.commit()
         self.deletions = self.data / "audio-deletions"
@@ -218,6 +291,7 @@ class Library:
             "kind": row["kind"], "audioUrl": "/audio/" + row["audio_filename"],
             "loopStart": row["loop_start"], "loopEnd": row["loop_end"],
             "tags": json.loads(row["tags_json"]), "sourceUrl": row["source_url"], "addedAt": row["added_at"],
+            "storage": json.loads(row["storage_json"]) if "storage_json" in row.keys() and row["storage_json"] else None,
         }
 
     @staticmethod
@@ -233,7 +307,9 @@ class Library:
             playlists = [self.playlist(conn, row) for row in conn.execute("SELECT * FROM playlists ORDER BY created_at, rowid")]
             return {"tracks": tracks, "playlists": playlists}
 
-    def import_file(self, path, metadata=None, allow_duplicate=False, filename=None, *, _on_import=None, _before_import=None, _staging_dir=None):
+    def import_file(self, path, metadata=None, allow_duplicate=False, filename=None, *, allow_native_opus=True, _provenance=None, _on_import=None, _before_import=None, _staging_dir=None):
+        from .storage_policy import prepare_original, native_opus, file_hash
+        native_opus(allow_native_opus)
         source = Path(path).expanduser().resolve()
         if not source.is_file():
             raise LibraryError("Choose an existing audio file.")
@@ -263,33 +339,34 @@ class Library:
                 raise LibraryError("The audio file is empty.")
             duration, extension = probe(task_temp)
             values = metadata_values({} if metadata is None else metadata, title_name, duration)
-            original_hash = digest.hexdigest()
-            if extension is None:
-                handle, converted_temp = tempfile.mkstemp(prefix=".convert-", suffix=".m4a", dir=_staging_dir or self.audio)
-                os.close(handle)
-                try:
-                    result = subprocess.run(
-                        [executable("ffmpeg"), "-v", "error", "-nostdin", "-y",
-                         *local_audio_input_options(task_temp), "-i", task_temp,
-                         "-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart",
-                         "-fs", str(MAX_AUDIO_BYTES + 1), converted_temp],
-                        capture_output=True, timeout=600, **subprocess_options(),
-                    )
-                except (subprocess.TimeoutExpired, OSError):
-                    raise LibraryError("The audio could not be converted to a browser-compatible format.")
-                if result.returncode:
-                    raise LibraryError("The audio could not be converted to a browser-compatible format.")
-                duration, _ = probe(converted_temp)
+            incoming_hash = digest.hexdigest()
+            if _provenance is None:
+                if values["kind"] == "loop" and extension in (None, ".opus"):
+                    raise LibraryError("Prepare this loop in the import preview so its exact boundaries can be verified and saved as lossless FLAC.")
+                if values["kind"] == "loop" and not allow_native_opus and inspect_audio(task_temp)["codec"] == "opus":
+                    raise LibraryError("Prepare this loop in the import preview so browser-compatible audio can retain verified sample boundaries.")
+                stored = prepare_original(task_temp, _staging_dir or self.audio, allow_native_opus=allow_native_opus)
+                converted_temp = stored["file"] if Path(stored["file"]) != Path(task_temp) else None
+                storage = stored["storage"]
+                if converted_temp is not None:
+                    os.unlink(task_temp)
+                    task_temp, converted_temp = converted_temp, None
+                duration, extension = probe(task_temp)
                 values = metadata_values({} if metadata is None else metadata, title_name, duration)
-                extension = ".m4a"
-                os.unlink(task_temp)
-                task_temp, converted_temp = converted_temp, None
-                size = os.path.getsize(task_temp)
-                if size > MAX_AUDIO_BYTES:
-                    raise LibraryError("The converted audio exceeds the 512 MB limit.", 413)
-                # Windows FlushFileBuffers requires a writable handle.
-                with open(task_temp, "rb+") as converted_file:
-                    os.fsync(converted_file.fileno())
+            else:
+                # Only preview owners supply this internal argument. Verify the
+                # exact preview bytes before using its earlier source identity.
+                storage = json.loads(json.dumps(_provenance, allow_nan=False))
+                if (not isinstance(storage, dict) or storage.get("stored", {}).get("sha256") != incoming_hash
+                        or storage.get("stored", {}).get("bytes") != size or extension is None):
+                    raise LibraryError("The prepared audio changed. Prepare this track again.", 409)
+            size = os.path.getsize(task_temp)
+            stored_hash = file_hash(task_temp)
+            original_hash = storage["source"]["sha256"]
+            duplicate_hash = stored_hash if storage["transformation"] == "edited_lossless" else original_hash
+            # Windows FlushFileBuffers requires a writable handle.
+            with open(task_temp, "rb+") as converted_file:
+                os.fsync(converted_file.fileno())
             track_id = uuid.uuid4().hex
             audio_filename = track_id + extension
             destination = self.audio / audio_filename
@@ -297,20 +374,28 @@ class Library:
                 conn.execute("BEGIN IMMEDIATE")
                 if not allow_duplicate:
                     duplicate = conn.execute(
-                        "SELECT title FROM tracks WHERE sha256=? OR (title_key=? AND artist_key=? AND kind=?) LIMIT 1",
-                        (original_hash, values["title"].casefold(), values["artist"].casefold(), values["kind"]),
+                        "SELECT title FROM tracks WHERE sha256 IN (?,?) OR (title_key=? AND artist_key=? AND kind=?) LIMIT 1",
+                        (duplicate_hash, stored_hash, values["title"].casefold(), values["artist"].casefold(), values["kind"]),
                     ).fetchone()
+                    if duplicate is None and storage["transformation"] != "edited_lossless":
+                        # A whole recording and a selection from it are different
+                        # saved audio. Source identity only deduplicates whole
+                        # imports, including compatibility conversions.
+                        duplicate = next((row for row in conn.execute(
+                            "SELECT title,storage_json FROM tracks WHERE source_sha256=?", (original_hash,))
+                            if row["storage_json"] and json.loads(row["storage_json"]).get("transformation") != "edited_lossless"), None)
                     if duplicate:
                         raise LibraryError(f"This audio or title is already in the library: {duplicate['title']}. For a different excerpt, edit its title before saving.", 409)
                 if _before_import is not None:
                     _before_import(Path(task_temp), destination)
                 os.replace(task_temp, destination)
                 task_temp = None
-                conn.execute("""INSERT INTO tracks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                conn.execute("""INSERT INTO tracks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                     track_id, values["title"], values["artist"], values["album"], values["duration"], duration,
                     values["kind"], audio_filename, values["loopStart"], values["loopEnd"], json.dumps(values["tags"]),
-                    values["sourceUrl"], now(), original_hash, size,
+                    values["sourceUrl"], now(), stored_hash, size,
                     values["title"].casefold(), values["artist"].casefold(),
+                    original_hash, json.dumps(storage, allow_nan=False),
                 ))
                 row = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
                 # Internal lifecycle owners can persist provenance in this same
@@ -364,7 +449,7 @@ class Library:
                     data = json.loads(receipt.read_text(encoding="utf-8"))
                     filename = data.get("filename", "")
                     if (data.get("app") != "stillroom-track-deletion" or
-                            not re.fullmatch(re.escape(receipt.stem) + r"\.(mp3|m4a|aac|wav|flac)", filename)):
+                            not re.fullmatch(re.escape(receipt.stem) + r"\.(mp3|m4a|aac|wav|flac|opus|ogg|webm)", filename)):
                         continue
                     staged = self.deletions / (receipt.stem + ".audio")
                     original = self.audio / filename
@@ -405,7 +490,7 @@ class Library:
                 filename = row["audio_filename"]
                 original = self.audio / filename
                 if (not re.fullmatch(r"[0-9a-f]{32}", row["id"])
-                        or not re.fullmatch(re.escape(row["id"]) + r"\.(mp3|m4a|aac|wav|flac)", filename)
+                        or not re.fullmatch(re.escape(row["id"]) + r"\.(mp3|m4a|aac|wav|flac|opus|ogg|webm)", filename)
                         or self.audio.is_symlink() or original.is_symlink()
                         or (original.exists() and not original.is_file())):
                     raise LibraryError("This song's audio location has changed. Restore its library copy before deleting it.", 409)

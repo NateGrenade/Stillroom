@@ -135,8 +135,8 @@ class AudioImportSecurityTests(unittest.TestCase):
         cases = (
             ("mp3", "libmp3lame", ".mp3"), ("flac", "flac", ".flac"),
             ("aac", "aac", ".aac"), ("m4a", "aac", ".m4a"),
-            ("m4a", "alac", ".m4a"), ("ogg", "libopus", ".m4a"),
-            ("webm", "libopus", ".m4a"), ("aiff", "pcm_s16be", ".m4a"),
+            ("m4a", "alac", ".m4a"), ("ogg", "libopus", ".webm"),
+            ("webm", "libopus", ".webm"), ("aiff", "pcm_s16be", ".m4a"),
         )
         for extension, codec, stored_extension in cases:
             with self.subTest(extension=extension, codec=codec):
@@ -148,7 +148,7 @@ class AudioImportSecurityTests(unittest.TestCase):
                 track = self.library.import_file(uploaded, {"title": codec}, allow_duplicate=True)
                 self.assertTrue(track["audioUrl"].endswith(stored_extension))
                 self.assertGreater(track["fileDuration"], .1)
-                if extension not in ("ogg", "webm", "aiff"):
+                if extension not in ("aiff", "ogg"):
                     stored = self.library.root / track["audioUrl"].lstrip("/")
                     self.assertEqual(stored.read_bytes(), encoded.read_bytes())
 
@@ -194,8 +194,8 @@ class AudioImportSecurityTests(unittest.TestCase):
 
     def test_conversion_that_exceeds_file_limit_is_rejected_and_cleaned_up(self):
         compressed = self.root / "small.ogg"
-        subprocess.run([executable("ffmpeg"), "-v", "error", "-nostdin", "-i", str(self.source),
-                        "-c:a", "libopus", "-b:a", "6k", str(compressed)], check=True, capture_output=True)
+        subprocess.run([executable("ffmpeg"), "-v", "error", "-nostdin", "-stream_loop", "9", "-i", str(self.source),
+                        "-ar", "44100", "-ac", "2", "-c:a", "vorbis", "-strict", "-2", "-b:a", "48k", str(compressed)], check=True, capture_output=True)
         original = compressed.read_bytes()
         with patch.object(library, "MAX_AUDIO_BYTES", len(original) + 1):
             with self.assertRaises(LibraryError) as caught:

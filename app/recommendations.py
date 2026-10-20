@@ -20,6 +20,7 @@ import uuid
 from .library import LibraryError, clean_text, number
 from .import_sources import normalize_youtube_url
 from .recommendation_catalog import canonical_key, discover_candidates, rank_candidates
+from .storage_policy import native_opus, reject_quality_options
 
 COOLDOWN = 24 * 3600
 SESSION_TTL = 3600
@@ -264,7 +265,9 @@ class Recommendations:
     def listen(self, identifier, options):
         if not isinstance(options, dict):
             raise LibraryError('Listening options must be an object.')
+        reject_quality_options(options)
         request_id = token(options.get('requestId'), 'requestId')
+        allow_native_opus = native_opus(options.get('allowNativeOpus', True))
         with self.lock:
             self._available()
             self._expire()
@@ -281,12 +284,14 @@ class Recommendations:
                    or other['sourceUrl'] == candidate['sourceUrl']) for other in self.candidates.values()):
                 raise LibraryError('This recording was already thumbs-downed.', 409)
             for session in self.sessions.values():
-                if session['candidateId'] == identifier and session['status'] in ACTIVE:
+                if (session['candidateId'] == identifier and session['status'] in ACTIVE
+                        and session.get('allowNativeOpus', True) == allow_native_opus):
                     session.setdefault('_requests', [session['requestId']]).append(request_id)
                     self._save(session=session)
                     self._sync(session)
                     return self._public_session(session)
             session = {'id': uuid.uuid4().hex, 'candidateId': identifier, 'requestId': request_id,
+                       'allowNativeOpus': allow_native_opus,
                        'status': 'preparing', 'track': None, 'message': 'Preparing this song for a listen…',
                        '_job': None, '_touched': self.clock(), '_position': 0, '_reported': 0, '_listened': 0,
                        '_seeked': False, '_completed': False, '_lastProgress': self.clock()}
@@ -303,6 +308,7 @@ class Recommendations:
 
     def _prepare(self, candidate, session):
         job = self.import_jobs.create({'source': 'youtube', 'url': candidate['sourceUrl'], 'metadataMode': 'manual',
+                                      'allowNativeOpus': session.get('allowNativeOpus', True),
                                       'metadata': {key: candidate.get(key, [] if key == 'tags' else '')
                                                    for key in ('title', 'artist', 'album', 'tags')}, 'exact': True, 'loop': False})
         session.update(status='preparing', _job=job['id'], _touched=self.clock(), track=None,
@@ -333,7 +339,7 @@ class Recommendations:
             if job['status'] == 'ready':
                 session.update(status='ready', track={**candidate, **job.get('metadata', {}),
                                'id': candidate['id'], 'audioUrl': job['audioUrl'], 'duration': job['duration'],
-                               'fileDuration': job['fileDuration'], 'kind': 'original'}, _lastProgress=self.clock(),
+                               'fileDuration': job['fileDuration'], 'kind': 'original', 'storage': job.get('storage')}, _lastProgress=self.clock(),
                                message='Keep it, pass on it, or leave it unrated.')
                 if candidate.get('rating') == 'up':
                     self._retain(candidate, session)
@@ -408,7 +414,8 @@ class Recommendations:
             # Stage under ImportJobs' process-owned preview folder. Hard-killed
             # copies/conversions are reclaimed along with the stopped preview.
             self.library.import_file(source, job['metadata'], _on_import=record_ownership,
-                                     _before_import=before_import, _staging_dir=source.parent)
+                                     _before_import=before_import, _staging_dir=source.parent,
+                                     _provenance=job.get('storage'))
         except Exception as exc:
             candidate.clear(); candidate.update(previous_candidate)
             session.clear(); session.update(previous_session)
@@ -417,9 +424,9 @@ class Recommendations:
                 # audio under other metadata. Reuse that copy without claiming it.
                 existing = self._existing(candidate)
                 if existing is None:
-                    digest = file_hash(source)
+                    digest = (job.get('storage') or {}).get('source', {}).get('sha256') or file_hash(source)
                     with self.library.connect() as conn:
-                        row = conn.execute('SELECT * FROM tracks WHERE sha256=? ORDER BY added_at,id LIMIT 1', (digest,)).fetchone()
+                        row = conn.execute('SELECT * FROM tracks WHERE sha256=? OR source_sha256=? ORDER BY added_at,id LIMIT 1', (digest, digest)).fetchone()
                         existing = self.library.track(row) if row else None
                 if existing:
                     session.update(status='retained', track=existing, message='This audio is already in your library.')
@@ -445,7 +452,7 @@ class Recommendations:
                 data = json.loads(receipt.read_text(encoding='utf-8'))
                 filename = data.get('filename', '')
                 if (data.get('app') != 'stillroom-recommendation-import'
-                        or not re.fullmatch(r'[0-9a-f]{32}\.(mp3|m4a|aac|wav|flac)', filename)
+                        or not re.fullmatch(r'[0-9a-f]{32}\.(mp3|m4a|aac|wav|flac|opus|ogg|webm)', filename)
                         or receipt.stem != Path(filename).stem):
                     continue
                 with self.library.connect() as conn:
@@ -471,7 +478,7 @@ class Recommendations:
         if owner and track and owner['filename'] == track['audio_filename']:
             filename = owner['filename']
             path = self.library.audio / filename
-            if (not re.fullmatch(r'[0-9a-f]{32}\.(mp3|m4a|aac|wav|flac)', filename)
+            if (not re.fullmatch(r'[0-9a-f]{32}\.(mp3|m4a|aac|wav|flac|opus|ogg|webm)', filename)
                     or path.is_symlink() or path.parent.resolve() != self.library.audio.resolve()
                     or (path.exists() and file_hash(path) != owner['sha256'])):
                 # Somebody replaced this copy outside Stillroom. Ownership no
@@ -488,7 +495,7 @@ class Recommendations:
             rows = list(conn.execute("SELECT * FROM recommendation_ownership WHERE state='garbage'"))
             for row in rows:
                 filename = row['filename']
-                if not re.fullmatch(r'[0-9a-f]{32}\.(mp3|m4a|aac|wav|flac)', filename):
+                if not re.fullmatch(r'[0-9a-f]{32}\.(mp3|m4a|aac|wav|flac|opus|ogg|webm)', filename):
                     continue
                 path = self.library.audio / filename
                 if path.is_symlink() or path.parent.resolve() != self.library.audio.resolve():
@@ -578,7 +585,7 @@ class Recommendations:
                 elif session['status'] not in ('preparing', 'retained'):
                     existing = self._existing(candidate)
                     active = next((other for other in self.sessions.values() if other['candidateId'] == candidate['id']
-                                   and other['status'] in ACTIVE), None)
+                                   and other['status'] in ACTIVE and other.get('allowNativeOpus', True) == session.get('allowNativeOpus', True)), None)
                     if existing:
                         candidate['state'] = 'retained'
                         session.update(status='retained', track=existing, message='Kept in your library.')
