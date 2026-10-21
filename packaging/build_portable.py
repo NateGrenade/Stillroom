@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING = ROOT / 'packaging'
-VERSION = '1.6.0'
+VERSION = '1.7.0'
 
 MAC_LAUNCH = '''#!/bin/sh
 # The folder stays portable; all dependencies are included beside the app.
@@ -56,6 +56,7 @@ def readme(windows):
     requirements='Windows 10 (22H2) or Windows 11, 64-bit Intel/AMD.' if windows else 'macOS 11 Big Sur or newer, on Apple Silicon or Intel.'
     extraction='Right-click the ZIP, choose Extract All, then open the extracted folder.' if windows else 'Double-click the ZIP to extract it, then open the Stillroom folder.'
     warning=('If Windows asks before running the downloaded launcher, review the file and confirm only if you trust this package. No administrator account is required.' if windows else 'This personal package is not Apple-notarized. If macOS blocks a launcher or bundled tool, use the system Privacy & Security review flow only if you trust this package. Do not disable Gatekeeper. No administrator installation or Terminal commands are needed for normal use.')
+    pocket=('Automatic USB export to iPhone is unavailable on Windows. Pocket source and\nmanual library-bundle preparation instructions are in the public repository.\nAn existing bundle can be copied using Apple Devices file sharing, then reviewed\nand imported in Pocket. Apple device-support software and trust may be required.' if windows else 'Choose Export to iPhone and select all songs, one ordered playlist, or individual\nsongs. Connect and unlock an already trusted iPhone running the compatible Pocket\nStillroom Dev app. Review the selection and intended device, then Copy to iPhone.\nOn the phone, tap +, choose the bundle under On this iPhone, review, and import.\nOriginal audio bytes, supported metadata, saved loops and playlist order travel\nin a .stillroomlibrary bundle. Accounts and cookies do not. Copying is not importing.\nIf the outcome is unclear, use Check transfer before retrying. Keep transfer receipts\nin data/.pocket-exports.json. An interrupted transfer can leave hidden staging files.\nThis path uses Apple private MobileDevice interfaces and existing USB trust; it\ncreates no pairing or signing credentials. Compatibility can change with macOS.')
     return f'''STILLROOM {VERSION} — PORTABLE EDITION
 
 START HERE
@@ -138,6 +139,9 @@ Time stretching and reverb can change the texture of music, especially at extrem
 Show/Hide recommendations collapses the section without stopping its audio.
 These interface choices are remembered in the same browser and local address.
 
+POCKET STILLROOM
+{pocket}
+Pocket is a separately built native iOS companion, not included in these desktop\nZIPs. No ready-to-install signed iPhone app is supplied by this release. Source,\nbuild instructions and transfer-format details are under PocketStillroom/ at\nhttps://github.com/NateGrenade/Stillroom . Each user's signing and device setup\nremain separate; do not share a personal development profile or private key.\n+Desktop export is read-only: it does not delete or rewrite source songs. Review\n+free space on both devices; import needs more space than the copied bundle alone.\n+
 ADDING AUDIO
 Choose Audio files or YouTube link. Auto fills available track information;
 Enter myself lets you supply title, creator, and album. Review before saving.

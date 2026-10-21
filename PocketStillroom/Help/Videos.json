@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "videos": [
+    {"id": "first-install", "title": "Install and open the sample app", "status": "not_recorded", "url": null, "writtenFallback": "Setup.md"},
+    {"id": "refresh-both", "title": "Refresh SideStore and Pocket Stillroom", "status": "not_recorded", "url": null, "writtenFallback": "RefreshAndRecovery.md"},
+    {"id": "import-offline", "title": "Import a library and check offline listening", "status": "not_recorded", "url": null, "writtenFallback": "UseAndImport.md"},
+    {"id": "backup-restore", "title": "Back up and restore a sample library", "status": "not_recorded", "url": null, "writtenFallback": "RefreshAndRecovery.md"},
+    {"id": "will-not-open", "title": "What to do when the app will not open", "status": "not_recorded", "url": null, "writtenFallback": "Troubleshooting.md"}
+  ]
+}

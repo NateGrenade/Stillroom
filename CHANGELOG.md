@@ -1,5 +1,13 @@
 # Changes
 
+## 1.7.0
+
+- Export the whole library, one playlist in saved order, or a custom song selection to a versioned `.stillroomlibrary` bundle containing original audio bytes, supported metadata and saved loop boundaries. Source libraries remain unchanged; account cookies and credentials are excluded.
+- Add reviewed, cancellable Mac USB transfer into the compatible Pocket Stillroom Dev app, with device selection, space checks, full readback verification and persistent receipts for uncertain outcomes. Uses existing trust and Apple's private MobileDevice interfaces; automatic Windows transfer is unavailable.
+- Publish the native iOS companion source under `PocketStillroom/`: offline library import, playlists, queue, saved loops, speed/pitch, reverb, background controls, local backup/recovery and setup help. Its + import sheet discovers complete cable-delivered bundles in Documents for review.
+
+Pocket requires separate user signing and device setup; this release contains no signed iPhone IPA. Mac Intel, native Windows and Safari have not been newly validated for this cable-export release. The existing Safari reverb limitation in 1.6.0 remains.
+
 ## 1.6.0
 
 - Add continuous 0.5×–2× playback speed, gentle preset snapping, and a pitch-follow toggle that defaults on; preferences apply to recommendation listening too.

@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "status": "prototype_setup_and_device_validation_required",
+  "topics": [
+    {
+      "id": "setup",
+      "title": "First setup",
+      "summary": "Use a compatible toolchain and your own signing setup. Check phone behavior and expiry separately.",
+      "steps": [
+        {
+          "instruction": "Use full compatible Xcode and an installed iOS runtime. Review your own account, trust, signing and device prompts personally; do not repeat working setup without a reason.",
+          "success": "The intended sample app opens; its actual signing expiry is checked separately."
+        },
+        {
+          "instruction": "Test songs, loops, speed/pitch, reverb, locked playback and an interruption with a small sample.",
+          "success": "Results identify the tested build and device without claiming exhaustive reliability."
+        },
+        {
+          "instruction": "If choosing SideStore, follow its current official Stable guide and personally handle credentials, verification codes, trust, pairing, VPN and certificate decisions.",
+          "success": "Manual refresh of both apps succeeds before any automation is relied on."
+        }
+      ],
+      "writtenGuide": "Setup.md"
+    },
+    {
+      "id": "import",
+      "title": "Import and listen offline",
+      "summary": "Start with a small .stillroomlibrary export. The phone keeps managed local copies.",
+      "steps": [
+        {
+          "instruction": "Keep the Mac export, transfer a copy through an available Files, iCloud Drive, AirDrop or Finder route, and download cloud-only files before import.",
+          "success": "The complete file is available on the phone."
+        },
+        {
+          "instruction": "Choose Import library, review the preview and notices, then Import into offline library. Keep the original export.",
+          "success": "The sample songs and ordered playlist appear without overwriting conflicts."
+        },
+        {
+          "instruction": "Test airplane-mode playback and relaunch, saved loops, the chosen transfer route and a sample backup restore.",
+          "success": "The samples work without the Mac or network, and the external backup restores in a disposable empty library."
+        }
+      ],
+      "writtenGuide": "UseAndImport.md"
+    },
+    {
+      "id": "audio",
+      "title": "Speed, pitch and reverb",
+      "summary": "Expand the speed readout to adjust it; added reverb is in Advanced options.",
+      "steps": [
+        {
+          "instruction": "Move the speed slider between 0.5× and 2×. It gently snaps near familiar speeds without preventing other values.",
+          "success": "The current speed is shown and the musical loop boundaries remain the same."
+        },
+        {
+          "instruction": "Pitch follows speed starts on. Turn it off to change timing while retaining the original pitch.",
+          "success": "Both modes sound as expected on the real phone."
+        },
+        {
+          "instruction": "Compare reverb at zero, a small amount and maximum on a song and a loop.",
+          "success": "Zero is dry; changes do not cause clicks, sudden volume jumps or broken playback."
+        }
+      ],
+      "writtenGuide": "UseAndImport.md"
+    },
+    {
+      "id": "refresh",
+      "title": "Refresh both apps",
+      "summary": "SideStore requires separate setup and validation. Refreshing renews signing permission; it does not back up music.",
+      "steps": [
+        {
+          "instruction": "First verify the selected signing route and actual expiry. If using SideStore after setup, use Wi-Fi and LocalDevVPN as its current guide requires, then open My Apps.",
+          "success": "SideStore can perform a manual refresh; no expiry date is guessed."
+        },
+        {
+          "instruction": "Refresh SideStore itself and Pocket Stillroom. Stop for unexpected account or certificate prompts.",
+          "success": "Both actual expiry indicators move forward and both apps reopen."
+        },
+        {
+          "instruction": "Treat a Shortcuts automation as an experiment until the actual phone and app version pass repeated tests. Keep manual refresh available.",
+          "success": "Expiry dates confirm success, rather than a shortcut notification alone."
+        }
+      ],
+      "writtenGuide": "RefreshAndRecovery.md"
+    },
+    {
+      "id": "recovery",
+      "title": "Back up and recover",
+      "summary": "Save an external backup. If the app cannot open its library, recovery creates a separate validated copy.",
+      "steps": [
+        {
+          "instruction": "Use Prepare backup, then Share backup. Save outside the app’s own folder and keep a Mac copy. During preparation, Cancel operation stops the work; keep the last independent backup.",
+          "success": "A completed external sample restores with matching songs, playlist order and loops; cancelled output is not treated as a backup."
+        },
+        {
+          "instruction": "If the app opens but its library cannot open, choose Choose backup, Review backup, then Restore into a new library. It retains the original and failed copies, so allow additional space.",
+          "success": "Only a separately validated copy becomes the selected library. Ordinary healthy-library import instead merges compatible IDs and refuses conflicts."
+        },
+        {
+          "instruction": "If an app expires, do not delete it first. Check which apps still open and follow the current signing-tool recovery guide.",
+          "success": "Both apps open again without assuming reinstall preserved data."
+        },
+        {
+          "instruction": "Personally handle renewed pairing, sign-in, trust or security approval. Keep the intended app identity for ordinary updates.",
+          "success": "The restored or updated library passes the same sample checks."
+        }
+      ],
+      "writtenGuide": "RefreshAndRecovery.md"
+    },
+    {
+      "id": "stuck",
+      "title": "I'm stuck",
+      "summary": "Start with what you can see: app will not open, refresh failed, file unavailable, import rejected or audio problem.",
+      "steps": [
+        {
+          "instruction": "Keep existing music and exports. Note the exact visible message and the step that failed.",
+          "success": "The problem can be described without exposing account or signing secrets."
+        },
+        {
+          "instruction": "For refresh issues, compare manual refresh with the shortcut. For audio, note the sample, rate, pitch mode, loop times and output device.",
+          "success": "A small reproducible case is available."
+        },
+        {
+          "instruction": "Use the external troubleshooting guide if the app cannot open. Do not change security settings or delete data blindly.",
+          "success": "The next action has a clear purpose and recovery path."
+        }
+      ],
+      "writtenGuide": "Troubleshooting.md"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+.build/
+DerivedData/
+DerivedData-*/
+*.xcresult/
+*.xcuserstate
+xcuserdata/
+Reports/private-*
+Fixtures/private-*
+*.stillroomlibrary
+*.ipa
+*.mobileprovision
+*.p12
+*.p8
+.DS_Store
+.exports/
+__pycache__/
+Reports/desktop-*.json
+Reports/private-*
+
+# Generated local validation evidence and fixtures
+Reports/
+Fixtures/
+*.pfx
+*.pem

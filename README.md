@@ -34,6 +34,8 @@ Choose a song’s **⋯ → Share song**. Copy a recognized YouTube source link,
 
 ## Export music to Pocket Stillroom
 
+The native iOS companion source and build instructions are in [PocketStillroom](PocketStillroom/README.md). These desktop releases do not include a signed iPhone app; signing and device setup are separate.
+
 The Mac desktop app can prepare a `.stillroomlibrary` bundle and copy it by USB into the intended Pocket Stillroom app's **Documents** folder. The bundle carries original compressed audio without re-encoding, song labels, saved loop boundaries and playlist ordering. Source audio and the library database are read-only during export; accounts, cookies and runtime files are excluded. Copying a bundle does not import its songs automatically.
 
 On the Mac:
