@@ -5,6 +5,7 @@ import { PlaylistImportDialog } from './playlist-import.js';
 import { SettingsDialog } from './settings.js';
 import { EditInfoDialog } from './edit-info.js';
 import { ShareSongDialog } from './share-song.js';
+import { PocketExportDialog } from './pocket-export.js';
 import { SpeedControl, AdvancedPlaybackOptions, RecommendationDisclosure, normalizeReverb } from './playback-controls.js';
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -106,6 +107,8 @@ let chooserBusy = false;
 let playbackRowSignature = '';
 let menuTrigger = null;
 let recommendations = null;
+let pocketExport = null;
+let pocketExportReturnTrack = null;
 
 hydrateIcons();
 const volume = Number(readPreference('volume', 0.4));
@@ -262,6 +265,7 @@ function renderCollection() {
   $('#track-heading').textContent = isSearching ? 'Search results' : filter === 'loop' || view === 'loops' ? 'Seamless loops' : filter === 'original' ? 'Original tracks' : playlist ? 'In this playlist' : view === 'recent' ? 'Freshly added' : 'All tracks';
   $('#track-total').textContent = `${tracks.length} ${tracks.length === 1 ? 'track' : 'tracks'}`;
   $('#shuffle-view').disabled = tracks.length === 0;
+  $('#export-pocket').disabled = library.tracks.length === 0 && !pocketExport?.job && !pocketExport?.unknownCreation;
   $('#library-error').hidden = !loadError;
   $('#library-error-text').textContent = loadError ? `We couldn’t open your collection. ${loadError}` : '';
   $('.track-table-header').hidden = tracks.length === 0;
@@ -445,6 +449,28 @@ const shareSong = new ShareSongDialog({
     (row ? $('.track-more', row) : $('#search')).focus();
   },
 });
+pocketExport = new PocketExportDialog({
+  dialog: $('#pocket-export-dialog'), api, showDialog, getLibrary: () => library,
+  onClose: () => {
+    const row = $$('.track-row').find(entry => entry.dataset.trackId === pocketExportReturnTrack);
+    (row ? $('.track-more', row) : $('#export-pocket')).focus();
+  },
+  onChange: state => {
+    const tracked = !!state.job || state.pending || state.unknownCreation;
+    $('#pocket-export-notice').hidden = !tracked;
+    $('#pocket-export-notice-text').textContent = state.message;
+    $('#export-pocket-label').textContent = state.active || state.pending || state.unknownCreation ? 'iPhone transfer…' : 'Export to iPhone';
+  },
+});
+function openPocketExport(selection, trackId = null) {
+  pocketExportReturnTrack = trackId;
+  const playlist = currentPlaylist();
+  const scope = selection || (playlist ? { mode: 'playlist', playlistId: playlist.id } : query.trim() || filter !== 'all' || view === 'loops' ? { mode: 'tracks', trackIds: visibleIds() } : { mode: 'all' });
+  pocketExport.open(scope).catch(error => toast(error.message));
+}
+$('#export-pocket').addEventListener('click', () => openPocketExport());
+$('#pocket-export-reopen').addEventListener('click', () => { pocketExportReturnTrack = null; pocketExport.open().catch(error => toast(error.message)); });
+pocketExport.resume();
 $('#open-settings').addEventListener('click', () => settings.open());
 $('#import-spotify-open').addEventListener('click', () => {
   if (importer.busy) return;
@@ -589,7 +615,7 @@ function openMenu(button, trackId) {
   menuTrackId = trackId;
   menuTrigger = button;
   const menu = $('#track-menu');
-  menu.innerHTML = `<button role="menuitem" data-menu-action="edit">${icon('edit')}Edit info</button><button role="menuitem" data-menu-action="share">${icon('share')}Share song</button><button role="menuitem" data-menu-action="add">${icon('playlist')}Add to playlist</button>${currentPlaylist() ? `<button role="menuitem" data-menu-action="remove" class="danger-action">${icon('close')}Remove from playlist</button>` : ''}<button role="menuitem" data-menu-action="delete" class="danger-action">${icon('trash')}Delete from library</button>`;
+  menu.innerHTML = `<button role="menuitem" data-menu-action="edit">${icon('edit')}Edit info</button><button role="menuitem" data-menu-action="share">${icon('share')}Share song</button><button role="menuitem" data-menu-action="pocket-export">${icon('upload')}Export to iPhone</button><button role="menuitem" data-menu-action="add">${icon('playlist')}Add to playlist</button>${currentPlaylist() ? `<button role="menuitem" data-menu-action="remove" class="danger-action">${icon('close')}Remove from playlist</button>` : ''}<button role="menuitem" data-menu-action="delete" class="danger-action">${icon('trash')}Delete from library</button>`;
   menu.hidden = false;
   button.setAttribute('aria-expanded', 'true');
   const rect = button.getBoundingClientRect();
@@ -605,6 +631,7 @@ $('#track-menu').addEventListener('click', (event) => {
   closeMenu();
   if (button.dataset.menuAction === 'edit') editInfo.open(library.tracks.find(track => track.id === id));
   else if (button.dataset.menuAction === 'share') shareSong.open(library.tracks.find(track => track.id === id));
+  else if (button.dataset.menuAction === 'pocket-export') openPocketExport({ mode: 'tracks', trackIds: [id] }, id);
   else if (button.dataset.menuAction === 'add') openAddToPlaylist(id);
   else if (button.dataset.menuAction === 'delete') confirmDeleteTrack(id);
   else if (button.dataset.menuAction === 'remove') removeFromPlaylist(id);

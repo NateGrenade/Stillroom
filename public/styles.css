@@ -779,3 +779,32 @@ main{width:100%;margin-left:0;padding-inline:20px;padding-bottom:calc(var(--play
 .update-badge { font-size: 10px; padding: 3px 6px; border-radius: 6px; color: #211b2e; background: #c9b5ff; }
 @media (max-width: 720px) { .topbar-actions { flex-wrap: wrap; } .settings-trigger { padding-inline: 10px; } }
 
+
+
+/* Explicit local Pocket Stillroom cable export. Playback stays independent. */
+.pocket-export-trigger{font-size:10px;white-space:nowrap}
+.pocket-export-modal{width:min(690px,calc(100vw - 32px))}
+.pocket-export-fields{border:1px solid var(--line);border-radius:8px;padding:16px;margin:0 0 16px;min-width:0}
+.pocket-export-fields legend{font-size:12px;color:var(--text);padding:0 6px}
+.pocket-export-fields label+label{margin-top:14px}
+.pocket-export-modal select,.pocket-export-modal input[type=search]{width:100%;font-size:12px;padding:11px;background:#17121d;border:1px solid #ffffff18;border-radius:6px;color:var(--text);margin:8px 0 12px}
+.pocket-selection-tools,.pocket-job-actions,.pocket-export-review{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pocket-selection-tools{font-size:11px;color:var(--muted);margin-bottom:10px}
+.pocket-track-choices{max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:6px}
+.pocket-export-modal .pocket-track-choice{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;margin:0;border-bottom:1px solid #ffffff08;font-size:12px;line-height:1.5;overflow-wrap:anywhere;cursor:pointer}
+.pocket-track-choice input{flex:0 0 auto;margin-top:3px;accent-color:var(--accent)}
+.pocket-export-review p{font-size:12px;line-height:1.6;margin:0;flex:1 1 230px}
+.pocket-export-includes,.pocket-export-modal .field-hint{font-size:11px;line-height:1.7;color:#b7a9c5;margin:12px 0}
+.pocket-export-destination{border-top:1px solid var(--line);padding-top:15px;margin-top:18px}
+.pocket-export-destination h3{font-size:14px;margin:0 0 12px}
+.pocket-export-job{padding:15px;background:#ffffff04;border:1px solid var(--line);border-radius:8px;margin-top:18px;overflow-wrap:anywhere}
+.pocket-export-job p{font-size:12px;line-height:1.6;margin:0 0 10px}
+.pocket-export-job progress{width:100%;height:12px;accent-color:var(--accent);margin:0 0 12px}
+.pocket-export-notice{position:fixed;z-index:35;right:18px;bottom:calc(var(--player) + 14px);max-width:min(460px,calc(100vw - 36px));display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 14px;margin:0 0 12px;border:1px solid #c6b2f050;border-radius:8px;background:#272131;font-size:12px;line-height:1.5}
+.pocket-export-notice[hidden]{display:none}
+.pocket-export-notice button{white-space:nowrap}
+.pocket-export-modal button{min-height:36px}
+.pocket-export-modal button:focus-visible,.pocket-export-modal input:focus-visible,.pocket-export-modal select:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media(max-width:720px){.collection-actions{flex-wrap:wrap;justify-content:flex-end;gap:10px}.pocket-export-modal{padding:20px}.pocket-export-notice{align-items:flex-start;flex-wrap:wrap}.pocket-export-modal .modal-footer{flex-wrap:wrap}.pocket-track-choices{max-height:190px}}
+
+.pocket-empty-selection{padding:12px;font-size:12px;color:var(--soft)}

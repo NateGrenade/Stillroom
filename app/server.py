@@ -32,6 +32,7 @@ from .youtube_auth import YouTubeAuth, MAX_COOKIE_BYTES
 from .updates import Updates, MAX_UPDATE_BYTES
 from .sharing import Sharing
 from .storage_policy import reject_quality_options
+from .pocket_exports import PocketExports
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PORT = 8768
@@ -61,6 +62,7 @@ class Server(ThreadingHTTPServer):
             self.updates = Updates(self.library.root)
             self.mutation_lock = threading.RLock()
             self.sharing = Sharing(self.library, self.mutation_lock)
+            self.pocket_exports = PocketExports(self.library)
             self.import_jobs = ImportJobs(self.library, youtube_auth=self.youtube_auth)
             self.playlist_imports = PlaylistImports(self.library, self.import_jobs, youtube_auth=self.youtube_auth)
             self.recommendations = Recommendations(self.library, self.import_jobs)
@@ -85,6 +87,8 @@ class Server(ThreadingHTTPServer):
 
     def server_close(self):
         try:
+            if hasattr(self, "pocket_exports"):
+                self.pocket_exports.close()
             if hasattr(self, "sharing"):
                 self.sharing.close()
             if hasattr(self, "recommendations"):
@@ -205,6 +209,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response({"app": "stillroom", "version": __version__, "root": str(self.server.library.root), "pid": os.getpid()}, head=head)
         if path == "/api/library":
             return self.json_response(self.server.library.library(), head=head)
+        if path == "/api/pocket-export/devices":
+            self.valid_request(mutation=True)
+            return self.json_response(self.server.pocket_exports.devices(), head=head)
+        if path == "/api/pocket-export/jobs":
+            self.valid_request(mutation=True)
+            return self.json_response({"jobs": self.server.pocket_exports.jobs()}, head=head)
+        pocket_match = re.fullmatch(r"/api/pocket-export/jobs/([0-9a-f]{32})", path)
+        if pocket_match:
+            self.valid_request(mutation=True)
+            return self.json_response({"job": self.server.pocket_exports.get(pocket_match[1])}, head=head)
         if path == "/api/settings":
             return self.json_response({"youtube": self.server.youtube_auth.status(), "updates": self.server.updates.status()}, head=head)
         if path == "/api/updates":
@@ -351,6 +365,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def write_request(self, path, method):
         library = self.server.library
+        if method == "POST" and path == "/api/pocket-export/review":
+            return self.json_response(self.server.pocket_exports.review(self.json_body(strict=True)))
+        if method == "POST" and path == "/api/pocket-export/jobs":
+            return self.json_response({"job": self.server.pocket_exports.start(self.json_body(strict=True))}, 202)
+        pocket_check = re.fullmatch(r"/api/pocket-export/jobs/([0-9a-f]{32})/check", path)
+        if method == "POST" and pocket_check:
+            if self.json_body(strict=True):
+                raise LibraryError("Checking an existing transfer does not accept options.")
+            return self.json_response({"job": self.server.pocket_exports.check_transfer(pocket_check[1])})
+        pocket_match = re.fullmatch(r"/api/pocket-export/jobs/([0-9a-f]{32})", path)
+        if method == "DELETE" and pocket_match:
+            if self.headers.get("Content-Length", "0") != "0" or self.headers.get("Transfer-Encoding"):
+                raise LibraryError("Cancelling an export does not accept a request body.")
+            return self.json_response({"job": self.server.pocket_exports.cancel(pocket_match[1])})
         if method == "POST" and path == "/api/settings/youtube":
             return self.json_response(self.server.youtube_auth.configure(self.json_body()))
         if path == "/api/settings/youtube/cookies":
@@ -380,7 +408,7 @@ class Handler(BaseHTTPRequestHandler):
                     active = any(job.get("status") in ("queued", "working", "ready", "saving") for job in self.server.import_jobs.jobs.values())
                 with self.server.playlist_imports.lock:
                     active = active or any(session.get("status") in ("reading", "matching", "importing") for session in self.server.playlist_imports.sessions.values())
-                active = active or self.server.sharing.busy
+                active = active or self.server.sharing.busy or self.server.pocket_exports.busy
                 if active:
                     raise LibraryError("Finish or cancel your music imports and song downloads before installing an update.", 409)
                 return self.json_response(self.server.updates.install(self.server.server_port), 202)

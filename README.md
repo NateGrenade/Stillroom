@@ -32,6 +32,29 @@ Future imports retain compatible compressed source audio, remux compatible Opus 
 
 Choose a song’s **⋯ → Share song**. Copy a recognized YouTube source link, or download one fresh M4A copy for an uploaded or imported song. Choose whether to include the displayed title, artist, and album. A saved loop exports one pass through its region. Nothing uploads automatically; send the downloaded file yourself and share only audio you have the right to share. Recipients can use **Add music → Audio files**. Source access, loop settings, and playlists are not transferred.
 
+## Export music to Pocket Stillroom
+
+The Mac desktop app can prepare a `.stillroomlibrary` bundle and copy it by USB into the intended Pocket Stillroom app's **Documents** folder. The bundle carries original compressed audio without re-encoding, song labels, saved loop boundaries and playlist ordering. Source audio and the library database are read-only during export; accounts, cookies and runtime files are excluded. Copying a bundle does not import its songs automatically.
+
+On the Mac:
+
+1. Connect the iPhone by USB and unlock it. Review any **Trust This Computer** prompt personally; the exporter uses existing trust and never creates pairing or signing credentials.
+2. Open **Export to iPhone**. Under **Export scope**, choose **All songs in this library**, **One playlist, in its saved order**, or **Choose individual songs**.
+3. Choose **Review selection**, check the count and bundle size, and select the exact **iPhone and installed app**. Use **Refresh devices** if needed.
+4. Choose **Copy to iPhone** and keep Stillroom running and the cable connected until the result is confirmed. Closing the dialog leaves a started transfer running; **Cancel transfer** requests cancellation and waits for confirmation.
+
+On the iPhone, in the cable-enabled Pocket Stillroom build:
+
+1. Tap **+** (**Import library**).
+2. Under **On this iPhone**, choose the copied bundle. Use the refresh button if it has not appeared.
+3. Review the library and choose **Import into offline library**. Check the resulting songs and playlist before relying on offline playback.
+
+The desktop checks room for the copied bundle **plus 32 MiB**. Importing then needs additional space for managed offline audio; Pocket Stillroom checks that separately. A successful copy therefore does not prove the import will fit. Existing conflicting IDs are refused rather than overwritten.
+
+If the copy result or cancellation is unclear, use **Check transfer** before **New export** or any retry. A copy may already exist. Local `data/.pocket-exports.json` stores transfer receipts/status for this check, not account credentials; keep it private and do not delete it to force a retry. Interrupted hidden staging copies may remain when cleanup cannot be confirmed.
+
+This Mac path uses the installed private MobileDevice framework and needs no Xcode at runtime. That private interface can change; a controlled unsupported/error result is possible after an OS change. **Direct cable export on Windows is currently unsupported.** A separate manual fallback is [Apple Devices → Files → Pocket Stillroom → Add File → Add](https://support.apple.com/en-us/120402); it is not this automatic feature. Mac users can also use [Finder file sharing](https://support.apple.com/en-us/119585). The iPhone's **Browse Files** alternative remains available for Files/iCloud Drive transfers.
+
 ## Source and development
 
 The repository contains the app, browser interface, tests, and packaging scripts. Personal libraries, credentials, generated media, vendor binaries, and private review reports are excluded.
